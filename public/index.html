@@ -45,7 +45,7 @@
       const end_date = document.getElementById('end_date').value;
 
       const queryParams = new URLSearchParams({ start_date, end_date }).toString();
-      const apiUrl = `http://localhost:8014/api/sales-volume?${queryParams}`;
+      const apiUrl = `https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/sales-volume?${queryParams}`;
 
       try {
         // 1. 판매 데이터 가져오기
@@ -60,7 +60,7 @@
 
         // 2. 각 product_no에 대해 상품 정보 요청
         for (const sale of salesData) {
-          const productUrl = `http://localhost:8014/api/products/${sale.product_no}`;
+          const productUrl = `https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products/${sale.product_no}`;
           const productResponse = await fetch(productUrl);
 
           if (!productResponse.ok) {

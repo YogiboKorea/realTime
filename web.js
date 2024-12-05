@@ -103,7 +103,7 @@ app.get('/api/sales-volume', async (req, res) => {
 
     try {
         // 최근 등록된 상품 번호 목록 가져오기
-        const productData = await apiRequest('GET', 'http://localhost:8014/api/products');
+        const productData = await apiRequest('GET', 'https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products');
         const productNos = productData
             .filter(no => !excludedProductNos.includes(no)) // 제외된 product_no 필터링
             .join(',');
