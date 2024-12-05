@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sales Volume Report</title>
+</head>
+<body>
+  <h1>실시간 판매데이터</h1>
+
+  <form id="sales-form">
+    <label for="start_date">시작:</label>
+    <input type="date" id="start_date" name="start_date" required><br><br>
+
+    <label for="end_date">종료:</label>
+    <input type="date" id="end_date" name="end_date" required><br><br>
+
+    <button type="submit">데이터 불러오기</button>
+  </form>
+
+  <h2>JSON결과:</h2>
+  <pre id="results"></pre>
+  <div class="giids">상품리스트 </div>
+
+  <script>
+    const form = document.getElementById('sales-form');
+    const results = document.getElementById('results');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const start_date = document.getElementById('start_date').value;
+      const end_date = document.getElementById('end_date').value;
+
+      const queryParams = new URLSearchParams({ start_date, end_date }).toString();
+      const apiUrl = `http://localhost:8014/api/sales-volume?${queryParams}`;
+
+      try {
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          throw new Error(`Error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        results.textContent = JSON.stringify(data, null, 2); // 보기 좋은 JSON 포맷 출력
+      } catch (error) {
+        results.textContent = `Error: ${error.message}`;
+      }
+    });
+  </script>
+</body>
+</html>
