@@ -9,7 +9,7 @@ let accessToken = process.env.ACCESS_TOKEN;
 const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
-const cors = require('cors');
+
 app.use(cors({ origin: '*' }));
 
 // 접근 토큰

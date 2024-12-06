@@ -4,85 +4,72 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sales Volume Report</title>
-  <style>
-    #prd_list div {
-      margin: 10px 0;
-      border: 1px solid #ccc;
-      padding: 10px;
-    }
-    #prd_list img {
-      max-width: 100px;
-      height: auto;
-    }
-  </style>
 </head>
 <body>
-  <h1>실시간 판매 데이터</h1>
-
+  <h1>실시간 판매데이터</h1>
   <form id="sales-form">
     <label for="start_date">시작:</label>
     <input type="date" id="start_date" name="start_date" required><br><br>
-
     <label for="end_date">종료:</label>
     <input type="date" id="end_date" name="end_date" required><br><br>
-
     <button type="submit">데이터 불러오기</button>
   </form>
-
-  <h2 style="display:none">JSON결과:</h2>
+  <h2>JSON결과:</h2>
   <pre id="results"></pre>
-  <div id="prd_list">상품리스트</div>
-
+  <div id="prd_list">상품리스트 </div>
   <script>
     const form = document.getElementById('sales-form');
     const results = document.getElementById('results');
     const prdList = document.getElementById('prd_list');
 
     form.addEventListener('submit', async (event) => {
-      event.preventDefault();
+        event.preventDefault();
 
-      const start_date = document.getElementById('start_date').value;
-      const end_date = document.getElementById('end_date').value;
+        const start_date = document.getElementById('start_date').value;
+        const end_date = document.getElementById('end_date').value;
 
-      const queryParams = new URLSearchParams({ start_date, end_date }).toString();
-      const apiUrl = `https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/sales-volume?${queryParams}`;
+        const queryParams = new URLSearchParams({ start_date, end_date }).toString();
+        const apiUrl = `https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/sales-volume?${queryParams}`;
 
-      try {
-        // 1. 판매 데이터 가져오기
-        const response = await fetch(apiUrl);
-        if (!response.ok) {
-          throw new Error(`Error: ${response.statusText}`);
+        try {
+            // 1. 판매 데이터 가져오기
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`Error: ${response.statusText}`);
+            }
+
+            const salesData = await response.json();
+            results.textContent = JSON.stringify(salesData, null, 2); // JSON 결과 출력
+            prdList.innerHTML = ''; // 기존 리스트 초기화
+
+            // 2. 각 product_no에 대해 상품 정보 요청
+            for (const sale of salesData) {
+                const productUrl = `https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products/${sale.product_no}`;
+                const productResponse = await fetch(productUrl);
+
+                if (!productResponse.ok) {
+                    console.error(`Error fetching product details for product_no ${sale.product_no}`);
+                    continue;
+                }
+
+                const product = await productResponse.json();
+
+                // 3. HTML 요소 생성
+                const productElement = document.createElement('div');
+                productElement.innerHTML = `
+                    <div>${product.product_name}</div>
+                    <div><img src="${product.list_image}" alt="${product.product_name}" /></div>
+                    <div>${parseInt(product.price).toLocaleString('ko-KR')}원</div>
+                    <div>${parseInt(product.discountprice).toLocaleString('ko-KR')}원</div>
+
+                `;
+                prdList.appendChild(productElement);
+            }
+        } catch (error) {
+            results.textContent = `Error: ${error.message}`;
         }
-
-        const salesData = await response.json();
-        results.textContent = JSON.stringify(salesData, null, 2); // JSON 결과 출력
-        prdList.innerHTML = ''; // 기존 리스트 초기화
-
-        // 2. 각 product_no에 대해 상품 정보 요청
-        for (const sale of salesData) {
-          const productUrl = `https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products/${sale.product_no}`;
-          const productResponse = await fetch(productUrl);
-
-          if (!productResponse.ok) {
-            console.error(`Error fetching product details for product_no ${sale.product_no}`);
-            continue;
-          }
-
-          const product = await productResponse.json();
-
-          // 3. HTML 요소 생성
-          const productElement = document.createElement('div');
-          productElement.innerHTML = `
-            <div>${product.product_name}</div>
-            <div><img src="${product.tiny_image}" alt="${product.product_name}" /></div>
-            <div>${parseInt(product.price).toLocaleString('ko-KR')}원</div>
-          `;
-          prdList.appendChild(productElement);
-        }
-      } catch (error) {
-        results.textContent = `Error: ${error.message}`;
-      }
     });
-  </script>
+</script>
+
 </body>
 </html>
