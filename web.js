@@ -1,6 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
@@ -11,8 +10,11 @@ const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 
+const cors = require('cors');
 app.use(cors({ origin: '*' }));
-
+/*
+app.use(express.static('public')); // public 디렉토리에서 정적 파일 제공
+*/
 // 접근 토큰
 async function refreshAccessToken() {
     try {
@@ -100,7 +102,8 @@ app.get('/api/sales-volume', async (req, res) => {
     }
 
     // 제외할 product_no 설정
-    const excludedProductNos = []; // 제외할 상품 번호들
+    const excludedProductNos = [1743,1744,1745,1746,1747,1748,1749,1750,1751,1752,1753,1754,1755,1756,1757,1758,1759,1760,1858,1859,1860,1861,1862,1863,1864,1865,1866,1867,1868,1869,1870,1817,1872,
+    1873,1874,1875,1876,1877,1878,1879,1880,1881,1882,1883,1884,1885,1886,1887,1888,1889,1890,1891,1892,1893,2113]; // 제외할 상품 번호들
 
     try {
         // 최근 등록된 상품 번호 목록 가져오기
