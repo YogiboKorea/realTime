@@ -13,9 +13,6 @@ const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 
-// CORS 설정
-app.use(cors({ origin: '*' }));
-
 let db; // MongoDB 데이터베이스 객체
 
 // MongoDB 연결
@@ -23,11 +20,11 @@ async function connectMongoDB() {
     try {
         const client = new MongoClient(process.env.MONGO_URI);
         await client.connect();
-        console.log('MongoDB에 성공적으로 연결되었습니다.');
-        db = client.db(process.env.MONGO_DB_NAME); // 데이터베이스 선택
+        console.log('MongoDB 연결 성공');
+        db = client.db(process.env.MONGO_DB_NAME);
     } catch (error) {
         console.error('MongoDB 연결 오류:', error.message);
-        process.exit(1); // 연결 실패 시 프로세스 종료
+        process.exit(1);
     }
 }
 
@@ -46,9 +43,9 @@ async function refreshAccessToken() {
             }
         );
         accessToken = response.data.access_token;
-        console.log('Access Token이 갱신되었습니다:', accessToken);
+        console.log('Access Token 갱신 성공:', accessToken);
     } catch (error) {
-        console.error('Access Token 갱신 오류:', error.response ? error.response.data : error.message);
+        console.error('Access Token 갱신 오류:', error.message);
         throw error;
     }
 }
@@ -69,17 +66,51 @@ async function apiRequest(method, url, data = {}, params = {}) {
         return response.data;
     } catch (error) {
         if (error.response?.status === 401) {
-            console.log('Access Token이 만료되었습니다. 갱신 시도 중...');
+            console.log('Access Token 만료됨. 갱신 시도 중...');
             await refreshAccessToken(); // Access Token 갱신
             return apiRequest(method, url, data, params); // 갱신된 토큰으로 재시도
         } else {
-            console.error('API 요청 오류:', error.response ? error.response.data : error.message);
+            console.error('API 요청 오류:', error.message);
             throw error;
         }
     }
 }
 
-// 판매 데이터 가져와 MongoDB에 저장하는 함수
+// 최근 등록된 상품 목록 조회 (최대 1000개)
+app.get('/api/products', async (req, res) => {
+    try {
+        const limit = 100;
+        const maxProducts = 1000;
+        let offset = 0;
+        const allProducts = [];
+
+        while (allProducts.length < maxProducts) {
+            const params = {
+                limit,
+                offset,
+                order_by: '-created_date',
+            };
+
+            const data = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/products', {}, params);
+
+            if (!data || !data.products) {
+                return res.status(404).send('상품 데이터를 찾을 수 없습니다.');
+            }
+
+            if (data.products.length === 0) break;
+
+            allProducts.push(...data.products.map((product) => product.product_no));
+            offset += limit;
+        }
+
+        res.json(allProducts.slice(0, maxProducts));
+    } catch (error) {
+        console.error('상품 목록 요청 오류:', error.message);
+        res.status(500).send('상품 목록 요청 오류');
+    }
+});
+
+// 판매 데이터 MongoDB에 저장하는 함수
 async function fetchAndSaveSalesData() {
     const today = new Date();
     const end_date = today.toISOString().split('T')[0];
@@ -91,15 +122,11 @@ async function fetchAndSaveSalesData() {
         1878, 1879, 1880, 1881, 1882, 1883, 1884, 1885, 1886, 1887, 1888, 1889, 1890, 1891, 1892, 1893, 2113,
     ];
 
-    console.log('데이터 수집 시작:', { start_date, end_date });
-
     try {
         const productData = await apiRequest('GET', 'http://localhost:8014/api/products');
-        const productNos = productData
-            .filter((no) => !excludedProductNos.includes(no)) // 제외된 product_no 필터링
-            .join(',');
+        const productNos = productData.filter((no) => !excludedProductNos.includes(no));
 
-        if (!productNos) {
+        if (!productNos.length) {
             console.log('유효한 상품 번호가 없습니다.');
             return;
         }
@@ -112,9 +139,14 @@ async function fetchAndSaveSalesData() {
                 shop_no: 1,
                 start_date,
                 end_date,
-                product_no: productNos,
+                product_no: productNos.join(','),
             }
         );
+
+        if (!salesData || !salesData.salesvolume) {
+            console.log('판매 데이터를 찾을 수 없습니다.');
+            return;
+        }
 
         const mergedData = salesData.salesvolume.reduce((acc, current) => {
             const existing = acc.find((item) => item.product_no === current.product_no);
@@ -143,12 +175,16 @@ async function fetchAndSaveSalesData() {
         }));
 
         const sortedData = enrichedData
-            .sort((a, b) => parseInt(b.calculated_total_price.replace(/,/g, ''), 10) - parseInt(a.calculated_total_price.replace(/,/g, ''), 10))
+            .sort(
+                (a, b) =>
+                    parseInt(b.calculated_total_price.replace(/,/g, ''), 10) -
+                    parseInt(a.calculated_total_price.replace(/,/g, ''), 10)
+            )
             .slice(0, 6);
 
         const collection = db.collection('sales');
-        await collection.deleteMany({}); // 기존 데이터 삭제
-        await collection.insertMany(sortedData); // 새 데이터 저장
+        await collection.deleteMany({});
+        await collection.insertMany(sortedData);
 
         console.log('MongoDB에 판매 데이터 저장 완료.');
     } catch (error) {
@@ -156,7 +192,7 @@ async function fetchAndSaveSalesData() {
     }
 }
 
-// MongoDB 데이터 제공 API
+// MongoDB 데이터 API
 app.get('/api/mongo-sales', async (req, res) => {
     try {
         const collection = db.collection('sales');
@@ -168,17 +204,18 @@ app.get('/api/mongo-sales', async (req, res) => {
     }
 });
 
-// Cron 작업 - 매주 화요일 00:00에 데이터 갱신
-cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
-
-// 테스트용 Cron 작업
-cron.schedule('57 14 * * *', async () => {
-    console.log('테스트 Cron 작업 실행');
+// 테스트용 Cron 작업 (매일 14:46)
+cron.schedule('13 15 * * *', async () => {
+    console.log('테스트용 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
 
-// 서버 시작 및 MongoDB 연결
+/*
+// 정기 Cron 작업 (매주 화요일 00:00)
+cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
+*/
+// 서버 시작
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT}에서 실행 중입니다.`);
-    await connectMongoDB(); // 서버 시작 시 MongoDB 연결 초기화
+    await connectMongoDB();
 });
