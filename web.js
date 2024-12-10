@@ -168,8 +168,12 @@ app.get('/api/mongo-sales', async (req, res) => {
 });
 
 // 매주 화요일 00:00에 데이터 갱신
-cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
+//cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
 
+cron.schedule('46 14 * * *', async () => {
+    console.log('테스트 Cron 작업 실행');
+    await fetchAndSaveSalesData();
+});
 // 서버 시작 및 MongoDB 연결
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT}에서 실행 중입니다.`);
