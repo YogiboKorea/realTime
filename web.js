@@ -205,15 +205,11 @@ app.get('/api/mongo-sales', async (req, res) => {
 });
 
 // 테스트용 Cron 작업 (매일 14:46)
-cron.schedule('17 15 * * *', async () => {
+cron.schedule('24 15 * * *', async () => {
     console.log('테스트용 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
 
-/*
-// 정기 Cron 작업 (매주 화요일 00:00)
-cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
-*/
 // 서버 시작
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT}에서 실행 중입니다.`);

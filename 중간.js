@@ -205,3 +205,9 @@ app.get('/api/products/:product_no', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`서버가 http://localhost:${PORT}에서 실행 중입니다.`);
 });
+
+
+/*
+// 정기 Cron 작업 (매주 화요일 00:00)
+cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
+*/
