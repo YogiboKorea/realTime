@@ -13,23 +13,23 @@ const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 
-// MongoDB 설정
-const mongoUri = process.env.MONGO_URI; // MongoDB URI
-const dbName = 'real_data';
-let db;
 
 // CORS 설정
 app.use(cors({ origin: '*' }));
+let db; // MongoDB 데이터베이스 객체
 
 // MongoDB 연결
-MongoClient.connect(mongoUri, { useUnifiedTopology: true }, (err, client) => {
-    if (err) {
-        console.error('MongoDB 연결 오류:', err);
-        process.exit(1);
+async function connectMongoDB() {
+    try {
+        const client = new MongoClient(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+        await client.connect();
+        console.log('MongoDB에 성공적으로 연결되었습니다.');
+        db = client.db(process.env.MONGO_DB_NAME); // 데이터베이스 선택
+    } catch (error) {
+        console.error('MongoDB 연결 오류:', error.message);
+        process.exit(1); // 연결 실패 시 프로세스 종료
     }
-    db = client.db(dbName);
-    console.log('MongoDB에 연결되었습니다.');
-});
+}
 
 // Access Token 갱신 함수
 async function refreshAccessToken() {
@@ -154,8 +154,6 @@ async function fetchAndSaveSalesData() {
     }
 }
 
-// 매주 월요일 00:00에 데이터 갱신
-cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
 
 // MongoDB 데이터 제공 API
 app.get('/api/mongo-sales', async (req, res) => {
@@ -169,7 +167,11 @@ app.get('/api/mongo-sales', async (req, res) => {
     }
 });
 
-// 서버 시작
-app.listen(PORT, () => {
+// 매주 화요일 00:00에 데이터 갱신
+cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
+
+// 서버 시작 및 MongoDB 연결
+app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT}에서 실행 중입니다.`);
+    await connectMongoDB(); // 서버 시작 시 MongoDB 연결 초기화
 });
