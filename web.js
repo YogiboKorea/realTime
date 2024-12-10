@@ -13,15 +13,15 @@ const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 
-
 // CORS 설정
 app.use(cors({ origin: '*' }));
+
 let db; // MongoDB 데이터베이스 객체
 
 // MongoDB 연결
 async function connectMongoDB() {
     try {
-        const client = new MongoClient(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+        const client = new MongoClient(process.env.MONGO_URI);
         await client.connect();
         console.log('MongoDB에 성공적으로 연결되었습니다.');
         db = client.db(process.env.MONGO_DB_NAME); // 데이터베이스 선택
@@ -41,8 +41,8 @@ async function refreshAccessToken() {
             {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': `Basic ${basicAuth}`
-                }
+                    Authorization: `Basic ${basicAuth}`,
+                },
             }
         );
         accessToken = response.data.access_token;
@@ -64,7 +64,7 @@ async function apiRequest(method, url, data = {}, params = {}) {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
-            }
+            },
         });
         return response.data;
     } catch (error) {
@@ -90,6 +90,8 @@ async function fetchAndSaveSalesData() {
         1859, 1860, 1861, 1862, 1863, 1864, 1865, 1866, 1867, 1868, 1869, 1870, 1817, 1872, 1873, 1874, 1875, 1876, 1877,
         1878, 1879, 1880, 1881, 1882, 1883, 1884, 1885, 1886, 1887, 1888, 1889, 1890, 1891, 1892, 1893, 2113,
     ];
+
+    console.log('데이터 수집 시작:', { start_date, end_date });
 
     try {
         const productData = await apiRequest('GET', 'http://localhost:8014/api/products');
@@ -154,7 +156,6 @@ async function fetchAndSaveSalesData() {
     }
 }
 
-
 // MongoDB 데이터 제공 API
 app.get('/api/mongo-sales', async (req, res) => {
     try {
@@ -167,13 +168,15 @@ app.get('/api/mongo-sales', async (req, res) => {
     }
 });
 
-// 매주 화요일 00:00에 데이터 갱신
-//cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
+// Cron 작업 - 매주 화요일 00:00에 데이터 갱신
+cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
 
-cron.schedule('52 14 * * *', async () => {
+// 테스트용 Cron 작업
+cron.schedule('57 14 * * *', async () => {
     console.log('테스트 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
+
 // 서버 시작 및 MongoDB 연결
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT}에서 실행 중입니다.`);
