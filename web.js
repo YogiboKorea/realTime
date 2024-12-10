@@ -123,7 +123,7 @@ async function fetchAndSaveSalesData() {
     ];
 
     try {
-        const productData = await apiRequest('GET', 'http://localhost:8014/api/products');
+        const productData = await apiRequest('GET', 'https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products');
         const productNos = productData.filter((no) => !excludedProductNos.includes(no));
 
         if (!productNos.length) {
@@ -205,7 +205,7 @@ app.get('/api/mongo-sales', async (req, res) => {
 });
 
 // 테스트용 Cron 작업 (매일 14:46)
-cron.schedule('04 16 * * *', async () => {
+cron.schedule('13 16 * * *', async () => {
     console.log('테스트용 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
