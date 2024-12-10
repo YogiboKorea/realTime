@@ -4,8 +4,6 @@ const cors = require('cors');
 const MongoClient = require('mongodb').MongoClient;
 const cron = require('node-cron');
 require('dotenv').config();
-
-const cors = require('cors');
 app.use(cors());
 
 const app = express();
@@ -208,7 +206,7 @@ app.get('/api/mongo-sales', async (req, res) => {
 });
 
 // 테스트용 Cron 작업 (매일 14:46)
-cron.schedule('13 16 * * *', async () => {
+cron.schedule('20 16 * * *', async () => {
     console.log('테스트용 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
