@@ -10,8 +10,11 @@ const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 
+const cors = require('cors');
+app.use(cors({ origin: '*' }));
+/*
 app.use(express.static('public')); // public 디렉토리에서 정적 파일 제공
-
+*/
 // 접근 토큰
 async function refreshAccessToken() {
     try {
@@ -99,11 +102,12 @@ app.get('/api/sales-volume', async (req, res) => {
     }
 
     // 제외할 product_no 설정
-    const excludedProductNos = []; // 제외할 상품 번호들
+    const excludedProductNos = [1743,1744,1745,1746,1747,1748,1749,1750,1751,1752,1753,1754,1755,1756,1757,1758,1759,1760,1858,1859,1860,1861,1862,1863,1864,1865,1866,1867,1868,1869,1870,1817,1872,
+    1873,1874,1875,1876,1877,1878,1879,1880,1881,1882,1883,1884,1885,1886,1887,1888,1889,1890,1891,1892,1893,2113]; // 제외할 상품 번호들
 
     try {
         // 최근 등록된 상품 번호 목록 가져오기
-        const productData = await apiRequest('GET', 'http://localhost:8014/api/products');
+        const productData = await apiRequest('GET', 'https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products');
         const productNos = productData
             .filter(no => !excludedProductNos.includes(no)) // 제외된 product_no 필터링
             .join(',');
@@ -200,6 +204,22 @@ app.get('/api/products/:product_no', async (req, res) => {
         res.status(500).send('상품 정보를 가져오는 중 오류가 발생했습니다.');
     }
 });
+
+
+cron.schedule('0 0 * * 1', fetchAndSaveSalesData);
+
+// MongoDB에서 데이터 불러오기 API
+app.get('/api/mongo-sales', async (req, res) => {
+    try {
+        const collection = db.collection('sales');
+        const salesData = await collection.find().toArray();
+        res.json(salesData);
+    } catch (error) {
+        console.error('MongoDB 데이터 가져오기 오류:', error.message);
+        res.status(500).send('MongoDB 데이터를 가져오는 중 오류가 발생했습니다.');
+    }
+});
+
 
 // 서버 시작
 app.listen(PORT, () => {
