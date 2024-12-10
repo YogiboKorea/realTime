@@ -18,7 +18,7 @@ let db; // MongoDB 데이터베이스 객체
 // MongoDB 연결
 async function connectMongoDB() {
     try {
-        const client = new MongoClient(`${process.env.MONGO_URI}?ssl=true`);
+        const client = new MongoClient(process.env.MONGO_URI);
         await client.connect();
         console.log('MongoDB 연결 성공');
         db = client.db(process.env.MONGO_DB_NAME);
@@ -123,7 +123,7 @@ async function fetchAndSaveSalesData() {
     ];
 
     try {
-        const productData = await apiRequest('GET', 'https://port-0-realtime-lzgmwhc4d9883c97.sel4.cloudtype.app/api/products');
+        const productData = await apiRequest('GET', 'http://localhost:8014/api/products');
         const productNos = productData.filter((no) => !excludedProductNos.includes(no));
 
         if (!productNos.length) {
@@ -205,7 +205,7 @@ app.get('/api/mongo-sales', async (req, res) => {
 });
 
 // 테스트용 Cron 작업 (매일 14:46)
-cron.schedule('44 15 * * *', async () => {
+cron.schedule('59 15 * * *', async () => {
     console.log('테스트용 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
