@@ -5,6 +5,9 @@ const MongoClient = require('mongodb').MongoClient;
 const cron = require('node-cron');
 require('dotenv').config();
 
+const cors = require('cors');
+app.use(cors());
+
 const app = express();
 const PORT = 8014;
 
