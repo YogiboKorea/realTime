@@ -170,7 +170,7 @@ app.get('/api/mongo-sales', async (req, res) => {
 // 매주 화요일 00:00에 데이터 갱신
 //cron.schedule('0 0 * * 2', fetchAndSaveSalesData);
 
-cron.schedule('46 14 * * *', async () => {
+cron.schedule('52 14 * * *', async () => {
     console.log('테스트 Cron 작업 실행');
     await fetchAndSaveSalesData();
 });
