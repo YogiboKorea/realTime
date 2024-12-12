@@ -2,8 +2,10 @@
 const express = require('express');
 const axios = require('axios');
 require('dotenv').config();
-const mongoose = require('mongoose');
+const { MongoClient } = require('mongodb');
 const cors = require('cors');
+const moment = require('moment-timezone');
+const schedule = require('node-schedule');
 
 const app = express();
 const PORT = 8014;
@@ -18,25 +20,6 @@ const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name
 
 app.use(cors());
 app.use(express.json());
-
-// MongoDB 연결
-mongoose.connect(mongoUri, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-}).then(() => console.log('MongoDB 연결 성공'))
-  .catch(err => console.error('MongoDB 연결 실패:', err));
-
-// MongoDB 스키마 정의
-const ProductSchema = new mongoose.Schema({
-    product_no: Number,
-    product_name: String,
-    product_price: String,
-    total_sales: Number,
-    calculated_total_price: String,
-    created_date: Date
-});
-
-const Product = mongoose.model('Product', ProductSchema);
 
 // Access Token 갱신 함수
 async function refreshAccessToken() {
@@ -86,61 +69,175 @@ async function apiRequest(method, url, data = {}, params = {}) {
     }
 }
 
-// 판매 순위 기반 상품 정보 저장
-app.get('/api/save-sales-rank-products', async (req, res) => {
-    const { start_date, end_date, shop_no = 1 } = req.query;
-
-    if (!start_date || !end_date) {
-        return res.status(400).send('시작 날짜와 종료 날짜는 필수입니다.');
-    }
-
+// 최근 등록된 상품 번호 가져오기
+async function getRecentProducts(excludedProductNos = []) {
     try {
-        // 판매 순위 데이터 가져오기
-        const salesData = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/reports/salesvolume', {}, {
-            shop_no,
-            start_date,
-            end_date,
-        });
+        const limit = 100;
+        const maxProducts = 1000;
+        let offset = 0;
+        const allProducts = [];
 
-        if (!salesData.salesvolume.length) {
-            return res.status(404).send('판매 데이터가 없습니다.');
+        while (allProducts.length < maxProducts) {
+            const params = { limit, offset, order_by: '-created_date' };
+            const data = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/products', {}, params);
+
+            if (data.products.length === 0) break;
+
+            allProducts.push(...data.products.map(product => product.product_no));
+            offset += limit;
         }
 
-        // 판매 순위 상품 번호 가져오기
-        const productNos = salesData.salesvolume.map(item => item.product_no);
+        const filteredProducts = allProducts.filter(productNo => !excludedProductNos.includes(productNo));
 
-        // 각 상품의 상세 정보 가져오기
-        const productDetails = await Promise.all(productNos.map(async (productNo) => {
-            const productData = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/products', {}, { product_no: productNo });
-            return productData.products[0];
-        }));
+        console.log('가져온 상품 번호 (제외 후):', filteredProducts);
+        return filteredProducts;
+    } catch (error) {
+        console.error('최근 상품 데이터를 가져오는 중 오류 발생:', error.message);
+        throw error;
+    }
+}
+
+// 서버 실행 시 자동 실행 함수
+async function initializeServer() {
+    const now = moment().tz('Asia/Seoul');
+    const start_date = now.clone().subtract(3, 'days').format('YYYY-MM-DD 00:00:00');
+    const end_date = now.format('YYYY-MM-DD 23:59:59');
+
+    let client;
+
+    try {
+        console.log(`데이터 수집 및 저장 시작: ${start_date} ~ ${end_date}`);
+
+        // 제외할 상품 번호 설정
+        const excludedProductNos = [2128,1593]; // 제외할 상품 번호 입력
+
+        // 최근 등록된 상품 번호 가져오기
+        const productNos = await getRecentProducts(excludedProductNos);
+
+        if (!productNos || productNos.length === 0) {
+            console.error('유효한 상품 번호가 없습니다.');
+            return;
+        }
+
+        console.log('상품 번호:', productNos);
+
+        // 판매 데이터 조회
+        const salesData = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/reports/salesvolume', {}, {
+            shop_no: 1,
+            start_date,
+            end_date,
+            product_no: productNos.join(','),
+        });
+
+        console.log('판매 데이터:', salesData.salesvolume);
+
+        if (!salesData.salesvolume || salesData.salesvolume.length === 0) {
+            console.error('판매 데이터가 없습니다.');
+            return;
+        }
+
+        // 동일한 product_no 합산
+        const mergedData = salesData.salesvolume.reduce((acc, current) => {
+            const existing = acc.find(item => item.product_no === current.product_no);
+
+            if (existing) {
+                existing.total_sales += current.total_sales;
+                existing.product_price = parseInt(existing.product_price.replace(/,/g, ''), 10) +
+                                         parseInt(current.product_price.replace(/,/g, ''), 10);
+                existing.product_price = existing.product_price.toLocaleString('ko-KR');
+            } else {
+                acc.push({
+                    ...current,
+                    total_sales: parseInt(current.total_sales, 10),
+                    product_price: parseInt(current.product_price.replace(/,/g, ''), 10).toLocaleString('ko-KR')
+                });
+            }
+            return acc;
+        }, []);
+
+        // `calculated_total_price` 기준 내림차순 정렬 및 상위 6개 추출
+        const top6Data = mergedData
+            .map(item => ({
+                ...item,
+                calculated_total_price: parseInt(item.product_price.replace(/,/g, ''), 10) * item.total_sales,
+            }))
+            .sort((a, b) => b.calculated_total_price - a.calculated_total_price)
+            .slice(0, 8);
+
+        console.log('상위 8개 데이터:', top6Data);
 
         // MongoDB에 저장
-        const savedProducts = await Product.insertMany(
-            productDetails.map(product => ({
-                product_no: product.product_no,
-                product_name: product.product_name,
-                product_price: product.product_price,
-                total_sales: salesData.salesvolume.find(item => item.product_no === product.product_no)?.total_sales || 0,
-                calculated_total_price: (
-                    parseInt(product.product_price.replace(/,/g, ''), 10) *
-                    (salesData.salesvolume.find(item => item.product_no === product.product_no)?.total_sales || 0)
-                ).toLocaleString('ko-KR'),
-                created_date: new Date(product.created_date),
-            }))
-        );
+        client = new MongoClient(mongoUri);
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(collectionName);
 
-        res.status(200).json({
-            message: '판매 순위 기반 상품 정보가 성공적으로 저장되었습니다.',
-            savedProducts
-        });
+        // 이전 데이터 삭제
+        await collection.deleteMany({});
+
+        // 새 데이터 삽입
+        for (const item of top6Data) {
+            const productData = await apiRequest('GET', `https://yogibo.cafe24api.com/api/v2/admin/products`, {}, { product_no: item.product_no });
+
+            if (productData.products && productData.products.length > 0) {
+                const product = productData.products[0];
+
+                await collection.insertOne({
+                    ...product,
+                    calculated_total_price: item.calculated_total_price,
+                });
+
+                console.log(`상품 번호 ${product.product_no} 데이터 저장 완료`);
+            } else {
+                console.error(`상품 번호 ${item.product_no} 데이터를 찾을 수 없습니다.`);
+            }
+        }
+
+        console.log('상위 6개 상품 데이터가 성공적으로 저장되었습니다.');
     } catch (error) {
-        console.error('판매 순위 상품 저장 중 오류 발생:', error.message);
-        res.status(500).send('판매 순위 상품 저장 중 오류 발생');
+        console.error('서버 초기화 중 오류 발생:', error.message);
+    } finally {
+        if (client) {
+            await client.close();
+        }
+    }
+}
+
+app.get('/api/products', async (req, res) => {
+    let client;
+
+    try {
+        client = new MongoClient(mongoUri);
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(collectionName);
+
+        // MongoDB에서 저장된 데이터 가져오기
+        const products = await collection.find({}).toArray();
+
+        // 반환
+        res.json(products);
+    } catch (error) {
+        console.error('MongoDB에서 데이터를 가져오는 중 오류 발생:', error.message);
+        res.status(500).send('데이터를 가져오는 중 오류가 발생했습니다.');
+    } finally {
+        if (client) {
+            await client.close();
+        }
     }
 });
 
 // 서버 시작
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+
+    // 3일 간격 00시 스케줄링
+    schedule.scheduleJob('0 0 */1 * *', async () => {
+        console.log('스케줄 작업 실행: 데이터 초기화 시작');
+        await initializeServer();
+        console.log('스케줄 작업 완료: 데이터 초기화 완료');
+    });
+
+    await initializeServer();
 });
+
