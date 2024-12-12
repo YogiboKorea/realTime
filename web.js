@@ -1,17 +1,14 @@
 const express = require('express');
 const axios = require('axios');
 require('dotenv').config();
-
 const app = express();
 const PORT = 8014;
-
 let accessToken = process.env.ACCESS_TOKEN;
 const refreshToken = process.env.REFRESH_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
-
-app.use(express.static('public')); // public 디렉토리에서 정적 파일 제공
-
+const cors = require('cors');
+app.use(cors());
 // 접근 토큰
 async function refreshAccessToken() {
     try {
