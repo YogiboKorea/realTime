@@ -162,9 +162,9 @@ async function initializeServer() {
                 calculated_total_price: parseInt(item.product_price.replace(/,/g, ''), 10) * item.total_sales,
             }))
             .sort((a, b) => b.calculated_total_price - a.calculated_total_price)
-            .slice(0, 6);
+            .slice(0, 10);
 
-        console.log('상위 6개 데이터:', top6Data);
+        console.log('상위 10개 데이터:', top6Data);
 
         // MongoDB에 저장
         client = new MongoClient(mongoUri);
@@ -231,8 +231,8 @@ app.get('/api/products', async (req, res) => {
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
 
-    // 10분 단위 스케줄링
-    schedule.scheduleJob('*/10 * * * *', async () => {
+    // 3일 간격 00시 스케줄링
+    schedule.scheduleJob('0 0 */1 * *', async () => {
         console.log('스케줄 작업 실행: 데이터 초기화 시작');
         await initializeServer();
         console.log('스케줄 작업 완료: 데이터 초기화 완료');
@@ -240,3 +240,4 @@ app.listen(PORT, async () => {
 
     await initializeServer();
 });
+
