@@ -130,7 +130,6 @@ async function initializeServer() {
             shop_no: 1,
             start_date,
             end_date,
-            category_no,
             product_no: productNos.join(','),
         });
 
