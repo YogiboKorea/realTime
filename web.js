@@ -198,6 +198,30 @@ async function initializeServer() {
     }
 }
 
+app.get('/api/products', async (req, res) => {
+    let client;
+
+    try {
+        client = new MongoClient(mongoUri);
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(collectionName);
+
+        // MongoDB에서 저장된 데이터 가져오기
+        const products = await collection.find({}).toArray();
+
+        // 반환
+        res.json(products);
+    } catch (error) {
+        console.error('MongoDB에서 데이터를 가져오는 중 오류 발생:', error.message);
+        res.status(500).send('데이터를 가져오는 중 오류가 발생했습니다.');
+    } finally {
+        if (client) {
+            await client.close();
+        }
+    }
+});
+
 // 서버 시작
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
