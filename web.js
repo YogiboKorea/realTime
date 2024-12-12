@@ -100,7 +100,7 @@ async function getRecentProducts(excludedProductNos = []) {
 // 서버 실행 시 자동 실행 함수
 async function initializeServer() {
     const now = moment().tz('Asia/Seoul');
-    const start_date = now.clone().subtract(7, 'days').format('YYYY-MM-DD 00:00:00');
+    const start_date = now.clone().subtract(3, 'days').format('YYYY-MM-DD 00:00:00');
     const end_date = now.format('YYYY-MM-DD 23:59:59');
 
     let client;
@@ -162,9 +162,9 @@ async function initializeServer() {
                 calculated_total_price: parseInt(item.product_price.replace(/,/g, ''), 10) * item.total_sales,
             }))
             .sort((a, b) => b.calculated_total_price - a.calculated_total_price)
-            .slice(0, 10);
+            .slice(0, 8);
 
-        console.log('상위 10개 데이터:', top6Data);
+        console.log('상위 8개 데이터:', top6Data);
 
         // MongoDB에 저장
         client = new MongoClient(mongoUri);
