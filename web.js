@@ -166,9 +166,9 @@ async function initializeServer() {
                 calculated_total_price: parseInt(item.product_price.replace(/,/g, ''), 10) * item.total_sales,
             }))
             .sort((a, b) => b.calculated_total_price - a.calculated_total_price)
-            .slice(0, 8);
+            .slice(0, 14);
 
-        console.log('상위 8개 데이터:', top6Data);
+        console.log('상위 14개 데이터:', top6Data);
 
         // MongoDB에 저장
         client = new MongoClient(mongoUri);
