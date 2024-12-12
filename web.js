@@ -70,7 +70,7 @@ async function apiRequest(method, url, data = {}, params = {}) {
 }
 
 // 최근 등록된 상품 번호 가져오기
-async function getRecentProducts() {
+async function getRecentProducts(excludedProductNos = []) {
     try {
         const limit = 100;
         const maxProducts = 1000;
@@ -87,8 +87,10 @@ async function getRecentProducts() {
             offset += limit;
         }
 
-        console.log('가져온 상품 번호:', allProducts);
-        return allProducts;
+        const filteredProducts = allProducts.filter(productNo => !excludedProductNos.includes(productNo));
+
+        console.log('가져온 상품 번호 (제외 후):', filteredProducts);
+        return filteredProducts;
     } catch (error) {
         console.error('최근 상품 데이터를 가져오는 중 오류 발생:', error.message);
         throw error;
@@ -106,8 +108,11 @@ async function initializeServer() {
     try {
         console.log(`데이터 수집 및 저장 시작: ${start_date} ~ ${end_date}`);
 
+        // 제외할 상품 번호 설정
+        const excludedProductNos = [2128]; // 제외할 상품 번호 입력
+
         // 최근 등록된 상품 번호 가져오기
-        const productNos = await getRecentProducts();
+        const productNos = await getRecentProducts(excludedProductNos);
 
         if (!productNos || productNos.length === 0) {
             console.error('유효한 상품 번호가 없습니다.');
@@ -225,12 +230,13 @@ app.get('/api/products', async (req, res) => {
 // 서버 시작
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
-    await initializeServer();
-});
 
-// 매주 월요일 00시에 데이터 갱신
-schedule.scheduleJob('0 0 * * 1', async () => {
-    console.log('스케줄 작업 실행: 데이터 초기화 시작');
+    // 10분 단위 스케줄링
+    schedule.scheduleJob('*/10 * * * *', async () => {
+        console.log('스케줄 작업 실행: 데이터 초기화 시작');
+        await initializeServer();
+        console.log('스케줄 작업 완료: 데이터 초기화 완료');
+    });
+
     await initializeServer();
-    console.log('스케줄 작업 완료: 데이터 초기화 완료');
 });
