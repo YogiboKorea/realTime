@@ -20,8 +20,6 @@ const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name
 
 app.use(cors());
 app.use(express.json());
-
-// Access Token 갱신 함수
 async function refreshAccessToken() {
     try {
         const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -35,10 +33,19 @@ async function refreshAccessToken() {
                 }
             }
         );
+
+        // 갱신된 Access Token 및 Refresh Token 저장
         accessToken = response.data.access_token;
+        process.env.REFRESH_TOKEN = response.data.refresh_token;
+
         console.log('Access Token 갱신 성공:', accessToken);
+        console.log('Refresh Token 갱신 성공:', process.env.REFRESH_TOKEN);
     } catch (error) {
-        console.error('Access Token 갱신 실패:', error.response ? error.response.data : error.message);
+        if (error.response?.data?.error === 'invalid_grant') {
+            console.error('Refresh Token이 만료되었습니다. 인증 단계를 다시 수행해야 합니다.');
+        } else {
+            console.error('Access Token 갱신 실패:', error.response ? error.response.data : error.message);
+        }
         throw error;
     }
 }
