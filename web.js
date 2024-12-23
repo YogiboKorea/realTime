@@ -12,13 +12,14 @@ const PORT = 8014;
 
 let accessToken = 'NXeIs5MfZkilGhNn5ndKeX';
 let refreshToken = 'f5iOoMkTGakL7gyQOZyRqD';
-//몽고 정보 전달 데이터
+
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 const mongoUri = process.env.MONGO_URI; // MongoDB URI
 const dbName = process.env.DB_NAME; // MongoDB Database Name
 const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name
 const tokenCollectionName = 'tokens'; // MongoDB Token Collection Name
+const rankingCollectionName = 'rankings'; // MongoDB Collection for Rankings
 
 app.use(cors());
 app.use(express.json());
@@ -163,6 +164,38 @@ async function getRecentProducts(excludedProductNos = []) {
     }
 }
 
+// 순위 변동 비교 함수
+async function compareRankings(newRankings) {
+    const client = new MongoClient(mongoUri);
+    try {
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(rankingCollectionName);
+
+        const previousRankings = await collection.find({}).toArray();
+
+        const updatedRankings = newRankings.map((item, index) => {
+            const previousRank = previousRankings.find(r => r.product_no === item.product_no);
+            if (!previousRank) {
+                return { ...item, rankChange: 'new' };
+            } else {
+                const rankDifference = previousRank.rank - (index + 1);
+                return rankDifference > 0
+                    ? { ...item, rankChange: `+${rankDifference}` }
+                    : { ...item, rankChange: null };
+            }
+        });
+
+        await collection.deleteMany({});
+        await collection.insertMany(updatedRankings);
+
+        console.log('순위 비교 및 저장 완료:', updatedRankings);
+        return updatedRankings;
+    } finally {
+        await client.close();
+    }
+}
+
 // 서버 실행 시 자동 실행 함수
 async function initializeServer() {
     const now = moment().tz('Asia/Seoul');
@@ -221,16 +254,20 @@ async function initializeServer() {
             return acc;
         }, []);
 
-        // `calculated_total_price` 기준 내림차순 정렬 및 상위 6개 추출
-        const top6Data = mergedData
-            .map(item => ({
+        // `calculated_total_price` 기준 내림차순 정렬 및 상위 14개 추출
+        const top14Data = mergedData
+            .map((item, index) => ({
                 ...item,
+                rank: index + 1,
                 calculated_total_price: parseInt(item.product_price.replace(/,/g, ''), 10) * item.total_sales,
             }))
             .sort((a, b) => b.calculated_total_price - a.calculated_total_price)
-            .slice(0, 20);
+            .slice(0, 14);
 
-        console.log('상위 14개 데이터:', top6Data);
+        console.log('상위 14개 데이터:', top14Data);
+
+        // 순위 변동 비교 및 MongoDB 저장
+        const updatedRankings = await compareRankings(top14Data);
 
         // MongoDB에 저장
         client = new MongoClient(mongoUri);
@@ -242,7 +279,7 @@ async function initializeServer() {
         await collection.deleteMany({});
 
         // 새 데이터 삽입
-        for (const item of top6Data) {
+        for (const item of updatedRankings) {
             const productData = await apiRequest('GET', `https://yogibo.cafe24api.com/api/v2/admin/products`, {}, { product_no: item.product_no });
 
             if (productData.products && productData.products.length > 0) {
@@ -251,6 +288,7 @@ async function initializeServer() {
                 await collection.insertOne({
                     ...product,
                     calculated_total_price: item.calculated_total_price,
+                    rankChange: item.rankChange,
                 });
 
                 console.log(`상품 번호 ${product.product_no} 데이터 저장 완료`);
@@ -259,7 +297,7 @@ async function initializeServer() {
             }
         }
 
-        console.log('상위 6개 상품 데이터가 성공적으로 저장되었습니다.');
+        console.log('상위 14개 상품 데이터가 성공적으로 저장되었습니다.');
     } catch (error) {
         console.error('서버 초기화 중 오류 발생:', error.message);
     } finally {
