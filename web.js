@@ -11,15 +11,66 @@ const app = express();
 const PORT = 8014;
 
 let accessToken = process.env.ACCESS_TOKEN;
-const refreshToken = process.env.REFRESH_TOKEN;
+let refreshToken = process.env.REFRESH_TOKEN;
+
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 const mongoUri = process.env.MONGO_URI; // MongoDB URI
 const dbName = process.env.DB_NAME; // MongoDB Database Name
 const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name
+const tokenCollectionName = 'tokens'; // MongoDB Token Collection Name
 
 app.use(cors());
 app.use(express.json());
+
+// MongoDB에서 토큰 읽기
+async function getTokensFromDB() {
+    const client = new MongoClient(mongoUri);
+    try {
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(tokenCollectionName);
+
+        const tokens = await collection.findOne({ name: 'cafe24Tokens' });
+        if (tokens) {
+            accessToken = tokens.accessToken;
+            refreshToken = tokens.refreshToken;
+            console.log('MongoDB에서 토큰 로드 성공:', tokens);
+        } else {
+            console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용');
+        }
+    } finally {
+        await client.close();
+    }
+}
+
+// MongoDB에 토큰 저장
+async function saveTokensToDB(newAccessToken, newRefreshToken) {
+    const client = new MongoClient(mongoUri);
+    try {
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(tokenCollectionName);
+
+        await collection.updateOne(
+            { name: 'cafe24Tokens' },
+            {
+                $set: {
+                    name: 'cafe24Tokens',
+                    accessToken: newAccessToken,
+                    refreshToken: newRefreshToken,
+                    updatedAt: new Date(),
+                },
+            },
+            { upsert: true } // 데이터가 없으면 새로 생성
+        );
+        console.log('MongoDB에 토큰 저장 완료');
+    } finally {
+        await client.close();
+    }
+}
+
+// Access Token 및 Refresh Token 갱신 함수
 async function refreshAccessToken() {
     try {
         const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -29,17 +80,25 @@ async function refreshAccessToken() {
             {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': `Basic ${basicAuth}`
-                }
+                    'Authorization': `Basic ${basicAuth}`,
+                },
             }
         );
 
-        // 갱신된 Access Token 및 Refresh Token 저장
-        accessToken = response.data.access_token;
-        process.env.REFRESH_TOKEN = response.data.refresh_token;
+        const newAccessToken = response.data.access_token;
+        const newRefreshToken = response.data.refresh_token;
 
-        console.log('Access Token 갱신 성공:', accessToken);
-        console.log('Refresh Token 갱신 성공:', process.env.REFRESH_TOKEN);
+        console.log('Access Token 갱신 성공:', newAccessToken);
+        console.log('Refresh Token 갱신 성공:', newRefreshToken);
+
+        // 갱신된 토큰을 저장
+        await saveTokensToDB(newAccessToken, newRefreshToken);
+
+        // 메모리에 갱신
+        accessToken = newAccessToken;
+        refreshToken = newRefreshToken;
+
+        return newAccessToken;
     } catch (error) {
         if (error.response?.data?.error === 'invalid_grant') {
             console.error('Refresh Token이 만료되었습니다. 인증 단계를 다시 수행해야 합니다.');
@@ -61,7 +120,7 @@ async function apiRequest(method, url, data = {}, params = {}) {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
-            }
+            },
         });
         return response.data;
     } catch (error) {
@@ -116,11 +175,7 @@ async function initializeServer() {
         console.log(`데이터 수집 및 저장 시작: ${start_date} ~ ${end_date}`);
 
         // 제외할 상품 번호 설정
-        const excludedProductNos = [1593,1594,1595,1596,1597,1598,1599,1600,1601,1602,1603,1604,1605,1606,1607,1608,1609,1610,1611,1612,1613,1614,1615,1616,
-            1617,1618,1619,1620,1621,1622,1623,1624,1625,1626,1627,1628,1629,1630,1631,1632,1633,1634,1635,1636,1638,1639,1641,1642,1643,1644,1645,1646,1649,1786,1792,1793
-            ,1794,1795,1796,1831,1997,2114,1547,1637,1660,1743,1744,1745,1746,1747,1748,1749,1750,1751,1752,1753,1754,1755,1756,1757,1758,1759,1760,1858,1859,1860,1861,
-            1862,1863,1864,1865,1866,1867,1868,1869,1870,1871,1872,1873,1874,1875,1876,1877,1878,1879,1880,1881,1882,1883,1884,1885,1886,1887,1888,1889,1890,1891,1892,1893
-        ]; // 제외할 상품 번호 입력
+        const excludedProductNos = [1593, 1594, 1595, 1596, 1597]; // 제외할 상품 번호 입력
 
         // 최근 등록된 상품 번호 가져오기
         const productNos = await getRecentProducts(excludedProductNos);
@@ -242,6 +297,9 @@ app.get('/api/products', async (req, res) => {
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
 
+    // MongoDB에서 최신 토큰 가져오기
+    await getTokensFromDB();
+
     // 3일 간격 00시 스케줄링
     schedule.scheduleJob('0 0 */1 * *', async () => {
         console.log('스케줄 작업 실행: 데이터 초기화 시작');
@@ -251,4 +309,3 @@ app.listen(PORT, async () => {
 
     await initializeServer();
 });
-
