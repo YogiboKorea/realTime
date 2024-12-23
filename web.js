@@ -10,9 +10,9 @@ const schedule = require('node-schedule');
 const app = express();
 const PORT = 8014;
 
-let accessToken = process.env.ACCESS_TOKEN;
-let refreshToken = process.env.REFRESH_TOKEN;
-
+let accessToken = 'NXeIs5MfZkilGhNn5ndKeX';
+let refreshToken = 'f5iOoMkTGakL7gyQOZyRqD';
+//몽고 정보 전달 데이터
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
 const mongoUri = process.env.MONGO_URI; // MongoDB URI
