@@ -346,14 +346,14 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// 서버 시작
+// 서버 시작 및 데이터 확인 
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
 
     // MongoDB에서 최신 토큰 가져오기
     await getTokensFromDB();
 
-    // 3일 간격 00시 스케줄링
+    // 3일 간격 00시 스케줄링 이며 해당 서버의 경우 매일 1회 실행되게 설정 00시
     schedule.scheduleJob('0 0 */1 * *', async () => {
         console.log('스케줄 작업 실행: 데이터 초기화 시작');
         await initializeServer();
