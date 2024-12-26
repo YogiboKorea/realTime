@@ -182,7 +182,7 @@ async function compareRankings(newRankings) {
             } else {
                 const rankDifference = previousRank.rank - (index + 1);
                 return rankDifference > 0
-                    ? { ...item, rankChange: `+${rankDifference}` }
+                    ? { ...item, rankChange: `▲${rankDifference}` }
                     : { ...item, rankChange: null };
             }
         });
