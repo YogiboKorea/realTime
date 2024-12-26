@@ -140,7 +140,7 @@ async function apiRequest(method, url, data = {}, params = {}) {
 // 최근 등록된 상품 번호 가져오기
 async function getRecentProducts(excludedProductNos = []) {
     try {
-        const limit = 10;
+        const limit = 20;
         const maxProducts = 1000;
         let offset = 0;
         const allProducts = [];
