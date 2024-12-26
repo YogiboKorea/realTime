@@ -137,88 +137,77 @@ async function apiRequest(method, url, data = {}, params = {}) {
     }
 }
 
-
-// MongoDB에서 기존 상품 순위 가져오기
-async function getPreviousRankings() {
-    const client = new MongoClient(mongoUri);
+// 최근 등록된 상품 번호 가져오기
+async function getRecentProducts(excludedProductNos = []) {
     try {
-        await client.connect();
-        const db = client.db(dbName);
-        const collection = db.collection(rankingCollectionName);
+        const limit = 40;
+        const maxProducts = 1000;
+        let offset = 0;
+        const allProducts = [];
 
-        const previousRankings = await collection.find({}).toArray();
-        return previousRankings;
-    } finally {
-        await client.close();
+        while (allProducts.length < maxProducts) {
+            const params = { limit, offset, order_by: '-created_date' };
+            const data = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/products', {}, params);
+
+            if (data.products.length === 0) break;
+
+            allProducts.push(...data.products.map(product => product.product_no));
+            offset += limit;
+        }
+
+        const filteredProducts = allProducts.filter(productNo => !excludedProductNos.includes(productNo));
+
+        console.log('가져온 상품 번호 (제외 후):', filteredProducts);
+        return filteredProducts;
+    } catch (error) {
+        console.error('최근 상품 데이터를 가져오는 중 오류 발생:', error.message);
+        throw error;
     }
 }
-
-// MongoDB에 새 순위 저장
-async function saveRankingsToDB(updatedRankings) {
+// 순위 변동 비교 함수
+async function compareRankings(newRankings) {
     const client = new MongoClient(mongoUri);
     try {
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection(rankingCollectionName);
 
+        // 이전 순위 데이터 가져오기
+        const previousRankings = await collection.find({}).toArray();
+
+        // 새로운 순위와 이전 순위를 비교
+        const updatedRankings = newRankings.map((item, index) => {
+            const previousItem = previousRankings.find(r => r.product_no === item.product_no);
+            const newRank = index + 1;
+
+            // 새로 등장한 상품
+            if (!previousItem) {
+                return { ...item, rankChange: 'new', rank: newRank };
+            }
+
+            // 상위 8위 내 상품의 순위 변동 계산
+            if (newRank <= 8) {
+                const rankDifference = previousItem.rank - newRank;
+                return {
+                    ...item,
+                    rankChange: rankDifference > 0 ? `+${rankDifference}` : null,
+                    rank: newRank,
+                };
+            }
+
+            // 9위 이하 상품은 변동 없음
+            return { ...item, rankChange: null, rank: newRank };
+        });
+
+        // 새로운 순위 데이터를 MongoDB에 저장
         await collection.deleteMany({});
         await collection.insertMany(updatedRankings);
 
-        console.log('순위 데이터 저장 완료');
+        console.log('순위 비교 및 저장 완료:', updatedRankings);
+        return updatedRankings;
     } finally {
         await client.close();
     }
-}
-
-// API 요청 함수
-async function apiRequest(method, url, data = {}, params = {}) {
-    try {
-        const response = await axios({
-            method,
-            url,
-            data,
-            params,
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-            },
-        });
-        return response.data;
-    } catch (error) {
-        if (error.response?.status === 401) {
-            console.log('Access Token 만료. 갱신 중...');
-            await refreshAccessToken();
-            return apiRequest(method, url, data, params);
-        } else {
-            console.error('API 요청 오류:', error.response ? error.response.data : error.message);
-            throw error;
-        }
-    }
-}
-
-// 순위 변동 비교 함수
-async function calculateRankChanges(newRankings) {
-    const previousRankings = await getPreviousRankings();
-
-    const updatedRankings = newRankings.map((item, index) => {
-        const previousItem = previousRankings.find(r => r.product_no === item.product_no);
-        const newRank = index + 1;
-
-        if (!previousItem) {
-            return { ...item, rankChange: 'new', rank: newRank };
-        } else if (newRank <= 8) {
-            const rankDifference = previousItem.rank - newRank;
-            return {
-                ...item,
-                rankChange: rankDifference > 0 ? `+${rankDifference}` : null,
-                rank: newRank,
-            };
-        } else {
-            return { ...item, rankChange: null, rank: newRank };
-        }
-    });
-
-    return updatedRankings;
 }
 
 // 서버 실행 시 자동 실행 함수
@@ -227,43 +216,133 @@ async function initializeServer() {
     const start_date = now.clone().subtract(3, 'days').format('YYYY-MM-DD 00:00:00');
     const end_date = now.format('YYYY-MM-DD 23:59:59');
 
+    let client;
+
     try {
         console.log(`데이터 수집 및 저장 시작: ${start_date} ~ ${end_date}`);
+
+        // 제외할 상품 번호 설정
+        const excludedProductNos = [1593, 1594, 1595, 1596, 1597]; // 제외할 상품 번호 입력
+
+        // 최근 등록된 상품 번호 가져오기
+        const productNos = await getRecentProducts(excludedProductNos);
+
+        if (!productNos || productNos.length === 0) {
+            console.error('유효한 상품 번호가 없습니다.');
+            return;
+        }
+
+        console.log('상품 번호:', productNos);
 
         // 판매 데이터 조회
         const salesData = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/reports/salesvolume', {}, {
             shop_no: 1,
             start_date,
             end_date,
+            product_no: productNos.join(','),
         });
 
-        const newRankings = salesData.salesvolume
-            .map(item => ({
-                product_no: item.product_no,
-                total_sales: item.total_sales,
+        console.log('판매 데이터:', salesData.salesvolume);
+
+        if (!salesData.salesvolume || salesData.salesvolume.length === 0) {
+            console.error('판매 데이터가 없습니다.');
+            return;
+        }
+
+        // 동일한 product_no 합산 및 총판매 금액 계산
+        const mergedData = salesData.salesvolume.reduce((acc, current) => {
+            const existing = acc.find(item => item.product_no === current.product_no);
+
+            if (existing) {
+                existing.total_sales += current.total_sales;
+                existing.product_price = parseInt(existing.product_price.replace(/,/g, ''), 10) +
+                                         parseInt(current.product_price.replace(/,/g, ''), 10);
+                existing.product_price = existing.product_price.toLocaleString('ko-KR');
+            } else {
+                acc.push({
+                    ...current,
+                    total_sales: parseInt(current.total_sales, 10),
+                    product_price: parseInt(current.product_price.replace(/,/g, ''), 10).toLocaleString('ko-KR')
+                });
+            }
+            return acc;
+        }, []);
+
+        // `calculated_total_price` 기준 내림차순 정렬 및 상위 20개 추출
+        const top20Data = mergedData
+            .map((item, index) => ({
+                ...item,
+                rank: index + 1,
                 calculated_total_price: parseInt(item.product_price.replace(/,/g, ''), 10) * item.total_sales,
             }))
             .sort((a, b) => b.calculated_total_price - a.calculated_total_price)
             .slice(0, 20);
 
-        const updatedRankings = await calculateRankChanges(newRankings);
+        console.log('상위 20개 데이터:', top20Data);
 
-        await saveRankingsToDB(updatedRankings);
+        // 순위 변동 비교 및 MongoDB 저장
+        const updatedRankings = await compareRankings(top20Data);
 
-        console.log('순위 변동 처리 완료');
+        // MongoDB에 저장
+        client = new MongoClient(mongoUri);
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(collectionName);
+
+        // 이전 데이터 삭제
+        await collection.deleteMany({});
+
+        // 새 데이터 삽입
+        for (const item of updatedRankings) {
+            const productData = await apiRequest('GET', `https://yogibo.cafe24api.com/api/v2/admin/products`, {}, { product_no: item.product_no });
+
+            if (productData.products && productData.products.length > 0) {
+                const product = productData.products[0];
+
+                await collection.insertOne({
+                    ...product,
+                    calculated_total_price: item.calculated_total_price,
+                    rankChange: item.rankChange,
+                });
+
+                console.log(`상품 번호 ${product.product_no} 데이터 저장 완료`);
+            } else {
+                console.error(`상품 번호 ${item.product_no} 데이터를 찾을 수 없습니다.`);
+            }
+        }
+
+        console.log('상위 20개 상품 데이터가 성공적으로 저장되었습니다.');
     } catch (error) {
         console.error('서버 초기화 중 오류 발생:', error.message);
+    } finally {
+        if (client) {
+            await client.close();
+        }
     }
 }
 
-// API Endpoint to Get Rankings
+
 app.get('/api/products', async (req, res) => {
+    let client;
+
     try {
-        const rankings = await getPreviousRankings();
-        res.json(rankings);
+        client = new MongoClient(mongoUri);
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection(collectionName);
+
+        // MongoDB에서 저장된 데이터 가져오기
+        const products = await collection.find({}).toArray();
+
+        // 반환
+        res.json(products);
     } catch (error) {
         console.error('MongoDB에서 데이터를 가져오는 중 오류 발생:', error.message);
         res.status(500).send('데이터를 가져오는 중 오류가 발생했습니다.');
+    } finally {
+        if (client) {
+            await client.close();
+        }
     }
 });
 
@@ -271,7 +350,11 @@ app.get('/api/products', async (req, res) => {
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
 
-    schedule.scheduleJob('0 0 */3 * *', async () => {
+    // MongoDB에서 최신 토큰 가져오기
+    await getTokensFromDB();
+
+    // 3일 간격 00시 스케줄링
+    schedule.scheduleJob('0 0 */1 * *', async () => {
         console.log('스케줄 작업 실행: 데이터 초기화 시작');
         await initializeServer();
         console.log('스케줄 작업 완료: 데이터 초기화 완료');
