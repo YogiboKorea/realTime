@@ -190,7 +190,7 @@ async function compareRankings(newRankings) {
                 const rankDifference = previousItem.rank - newRank;
                 return {
                     ...item,
-                    rankChange: rankDifference > 0 ? `+${rankDifference}` : null,
+                    rankChange: rankDifference > 0 ? `▲${rankDifference}` : null,
                     rank: newRank,
                 };
             }
