@@ -10,8 +10,8 @@ const schedule = require('node-schedule');
 const app = express();
 const PORT = 8014;
 
-let accessToken = 'mCMVYqmgEhIgUhpaCSEikC';
-let refreshToken = 'VOEKn7lIOt8gocuXi49yFA';
+let accessToken = '6FS5qjdfCyqQLXds7LUrKD';
+let refreshToken = 'WVyMdvpOAtUpz09m6A4S1D';
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -238,12 +238,14 @@ async function initializeServer() {
         }
 
         console.log('상품 번호:', productNos);
-        // 판매 데이터 조회 (product_no를 전달)
+        // 판매 데이터 조회: product_no와 함께 category_no를 파라미터로 전달하여
+        // 판매 수량 중 특정 카테고리(858)에 해당하는 데이터를 조회함
         const salesData = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/reports/salesvolume', {}, {
             shop_no: 1,
             start_date,
             end_date,
             product_no: productNos.join(','),
+            category_no: 858  // API 요청 시 분류번호 추가
         });
 
         console.log('전체 판매 데이터:', salesData.salesvolume);
@@ -253,16 +255,9 @@ async function initializeServer() {
             return;
         }
 
-        // 판매 데이터 중 category_no가 858인 데이터만 필터링
-        const filteredData = salesData.salesvolume.filter(item => item.category_no === 858);
-
-        if (filteredData.length === 0) {
-            console.error('category_no가 858인 판매 데이터가 없습니다.');
-            return;
-        }
-
-        // 동일한 product_no 합산 및 총판매 금액 계산
-        const mergedData = filteredData.reduce((acc, current) => {
+        // API 요청 시 이미 category_no가 858인 데이터만 조회하므로
+        // 별도의 필터링 없이 바로 합산 처리
+        const mergedData = salesData.salesvolume.reduce((acc, current) => {
             const existing = acc.find(item => item.product_no === current.product_no);
             if (existing) {
                 existing.total_sales += parseInt(current.total_sales, 10);
