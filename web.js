@@ -10,8 +10,8 @@ const schedule = require('node-schedule');
 const app = express();
 const PORT = 8014;
 
-let accessToken = 'PNfazDbAZKpZrNPsBkpkeN';
-let refreshToken = 'gf6fLJaQAU3XefSiGEA19D';
+let accessToken = 'l6QFHJvcIRnjVck8yhKdRD';
+let refreshToken = 'IirsvBqzKRIuyeNQdWLCfO';
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -20,7 +20,7 @@ const dbName = process.env.DB_NAME;             // MongoDB Database Name
 const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name (상품 데이터 저장)
 const tokenCollectionName = 'tokens';           // MongoDB Token Collection Name
 const rankingCollectionName = 'rankings';       // MongoDB 순위 Collection Name
-const MALLID ='yogibo';              // 예: "yourmallid"
+const MALLID = 'yogibo';              // 예: "yourmallid"
 const CATEGORY_NO = process.env.CATEGORY_NO || 858; // 카테고리 번호 (예: 858)
 
 app.use(cors());
@@ -135,12 +135,10 @@ async function apiRequest(method, url, data = {}, params = {}) {
 
 // 1. 카테고리 상품 목록 조회
 async function getCategoryProducts(category_no) {
-    // display_group=1 등 옵션을 포함하여 카테고리 상품 조회
     const url = `https://${MALLID}.cafe24api.com/api/v2/admin/categories/${category_no}/products`;
     const params = { display_group: 1 };
     try {
         const data = await apiRequest('GET', url, {}, params);
-        // 응답 데이터 구조에 따라 data.products에 상품 목록이 있다고 가정
         console.log(`카테고리 ${category_no}의 상품 수:`, data.products.length);
         return data.products;
     } catch (error) {
@@ -157,7 +155,6 @@ async function getSalesDataForProducts(productNos, start_date, end_date) {
         start_date,
         end_date,
         product_no: productNos.join(','),
-        // 필요한 경우 다른 파라미터도 추가할 수 있음
     };
     try {
         const data = await apiRequest('GET', url, {}, params);
@@ -178,31 +175,34 @@ function calculateAndSortRanking(categoryProducts, salesData) {
     
     // 동일 상품번호의 데이터 합산 (판매 수량, 판매 금액)
     const mergedData = filteredSales.reduce((acc, curr) => {
+        // 기존 데이터가 있다면 합산
         const existing = acc.find(item => item.product_no === curr.product_no);
+        // product_price를 숫자로 처리 (문자열일 경우 replace 후 파싱, 숫자일 경우 그대로 사용)
+        const currPrice = typeof curr.product_price === 'string' 
+                          ? parseInt(curr.product_price.replace(/,/g, ''), 10)
+                          : curr.product_price;
         if (existing) {
             existing.total_sales += parseInt(curr.total_sales, 10);
-            const combinedPrice = parseInt(existing.product_price.replace(/,/g, ''), 10) +
-                                   parseInt(curr.product_price.replace(/,/g, ''), 10);
-            existing.product_price = combinedPrice;
+            // 기존 product_price가 숫자형이므로 그대로 합산
+            existing.product_price += currPrice;
         } else {
             acc.push({
                 ...curr,
                 total_sales: parseInt(curr.total_sales, 10),
-                product_price: parseInt(curr.product_price.replace(/,/g, ''), 10)
+                product_price: currPrice
             });
         }
         return acc;
     }, []);
     
-    // 각 상품별 계산된 총 판매 금액 예시: (판매금액 * 판매수량)
+    // 각 상품별 계산된 총 판매 금액 (판매금액 * 판매수량)
     const rankedData = mergedData.map(item => ({
         ...item,
         calculated_total_price: item.product_price * item.total_sales
     }));
     
-    // 내림차순 정렬
+    // 내림차순 정렬 및 순위 번호 부여
     rankedData.sort((a, b) => b.calculated_total_price - a.calculated_total_price);
-    // 순위 번호 부여
     rankedData.forEach((item, index) => {
         item.rank = index + 1;
     });
@@ -217,9 +217,7 @@ async function compareRankings(newRankings) {
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection(rankingCollectionName);
-        // 이전 순위 데이터 가져오기
         const previousRankings = await collection.find({}).toArray();
-        // 새로운 순위와 이전 순위를 비교
         const updatedRankings = newRankings.map((item, index) => {
             const previousItem = previousRankings.find(r => r.product_no === item.product_no);
             const newRank = index + 1;
@@ -236,7 +234,6 @@ async function compareRankings(newRankings) {
             }
             return { ...item, rankChange: null, rank: newRank };
         });
-        // 새로운 순위 데이터를 MongoDB에 저장
         await collection.deleteMany({});
         await collection.insertMany(updatedRankings);
         console.log('순위 비교 및 저장 완료:', updatedRankings);
@@ -256,17 +253,16 @@ async function initializeServer() {
     try {
         console.log(`데이터 수집 및 저장 시작: ${start_date} ~ ${end_date}`);
 
-        // 1. 카테고리 상품 조회 (CATEGORY_NO)
+        // 1. 카테고리 상품 조회
         const categoryProducts = await getCategoryProducts(CATEGORY_NO);
         if (!categoryProducts || categoryProducts.length === 0) {
             console.error('해당 카테고리에는 상품이 없습니다.');
             return;
         }
-        // 추출된 상품 번호 목록
         const productNos = categoryProducts.map(p => p.product_no);
         console.log('카테고리 상품 번호:', productNos);
 
-        // 2. 판매 데이터 조회 (해당 상품 번호들 대상)
+        // 2. 판매 데이터 조회
         const salesData = await getSalesDataForProducts(productNos, start_date, end_date);
         if (!salesData || salesData.length === 0) {
             console.error('판매 데이터가 없습니다.');
@@ -280,16 +276,13 @@ async function initializeServer() {
         // 4. 순위 변동 비교 및 DB 저장 (rankingCollectionName)
         const updatedRankings = await compareRankings(rankedData);
 
-        // 5. 상품 상세정보 조회 후, 최종 결과 DB 저장 (collectionName)
+        // 5. 상품 상세정보 조회 후 최종 결과 DB 저장 (collectionName)
         client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
-
-        // 기존 데이터 삭제
         await collection.deleteMany({});
 
-        // 각 순위 데이터에 대해 상품 상세정보 API 호출
         for (const item of updatedRankings) {
             const productData = await apiRequest(
                 'GET',
