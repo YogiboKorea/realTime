@@ -10,8 +10,8 @@ const schedule = require('node-schedule');
 const app = express();
 const PORT = 8014;
 
-let accessToken = 'EPheeE7v1E0Tq3TsftGgWY';
-let refreshToken = 'VGUq6mowEdYgpqbiCTwhVC';
+let accessToken = 'mCMVYqmgEhIgUhpaCSEikC';
+let refreshToken = 'VOEKn7lIOt8gocuXi49yFA';
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -110,7 +110,6 @@ async function refreshAccessToken() {
     }
 }
 
-
 // API 요청 함수
 async function apiRequest(method, url, data = {}, params = {}) {
     try {
@@ -137,7 +136,7 @@ async function apiRequest(method, url, data = {}, params = {}) {
     }
 }
 
-// 최근 등록된 상품 번호 가져오기
+// 최근 등록된 상품 번호 가져오기 (카테고리 번호 858에 해당하는 상품만)
 async function getRecentProducts(excludedProductNos = []) {
     try {
         const limit = 40;
@@ -151,19 +150,25 @@ async function getRecentProducts(excludedProductNos = []) {
 
             if (data.products.length === 0) break;
 
-            allProducts.push(...data.products.map(product => product.product_no));
+            // 카테고리 번호 858에 해당하는 상품만 필터링 후 product_no 추출
+            const filtered = data.products
+                .filter(product => product.category_no === 858)
+                .map(product => product.product_no);
+            allProducts.push(...filtered);
             offset += limit;
         }
 
+        // 제외할 상품 번호 제거
         const filteredProducts = allProducts.filter(productNo => !excludedProductNos.includes(productNo));
 
-        console.log('가져온 상품 번호 (제외 후):', filteredProducts);
+        console.log('가져온 상품 번호 (제외 후, category_no 858):', filteredProducts);
         return filteredProducts;
     } catch (error) {
         console.error('최근 상품 데이터를 가져오는 중 오류 발생:', error.message);
         throw error;
     }
 }
+
 // 순위 변동 비교 함수
 async function compareRankings(newRankings) {
     const client = new MongoClient(mongoUri);
@@ -224,7 +229,7 @@ async function initializeServer() {
         // 제외할 상품 번호 설정
         const excludedProductNos = [1593, 1594, 1595, 1596, 1597]; // 제외할 상품 번호 입력
 
-        // 최근 등록된 상품 번호 가져오기
+        // 최근 등록된 상품 번호 가져오기 (카테고리 번호 858에 해당하는 상품만)
         const productNos = await getRecentProducts(excludedProductNos);
 
         if (!productNos || productNos.length === 0) {
@@ -233,7 +238,7 @@ async function initializeServer() {
         }
 
         console.log('상품 번호:', productNos);
-        // 판매 데이터 조회 (원래 요청 그대로, product_no를 전달하는 경우)
+        // 판매 데이터 조회 (product_no를 전달)
         const salesData = await apiRequest('GET', 'https://yogibo.cafe24api.com/api/v2/admin/reports/salesvolume', {}, {
             shop_no: 1,
             start_date,
@@ -248,11 +253,11 @@ async function initializeServer() {
             return;
         }
 
-        // category_no가 853인 데이터만 필터링
+        // 판매 데이터 중 category_no가 858인 데이터만 필터링
         const filteredData = salesData.salesvolume.filter(item => item.category_no === 858);
 
         if (filteredData.length === 0) {
-            console.error('category_no가 853인 판매 데이터가 없습니다.');
+            console.error('category_no가 858인 판매 데이터가 없습니다.');
             return;
         }
 
@@ -262,7 +267,7 @@ async function initializeServer() {
             if (existing) {
                 existing.total_sales += parseInt(current.total_sales, 10);
                 const combinedPrice = parseInt(existing.product_price.replace(/,/g, ''), 10) +
-                                    parseInt(current.product_price.replace(/,/g, ''), 10);
+                                        parseInt(current.product_price.replace(/,/g, ''), 10);
                 existing.product_price = combinedPrice.toLocaleString('ko-KR');
             } else {
                 acc.push({
@@ -274,7 +279,7 @@ async function initializeServer() {
             return acc;
         }, []);
 
-        // `calculated_total_price` 기준 내림차순 정렬 및 상위 20개 추출
+        // calculated_total_price 기준 내림차순 정렬 후 상위 20개 추출
         const top20Data = mergedData
             .map((item, index) => ({
                 ...item,
@@ -298,7 +303,7 @@ async function initializeServer() {
         // 이전 데이터 삭제
         await collection.deleteMany({});
 
-        // 새 데이터 삽입
+        // 새 데이터 삽입 (상품 상세정보 API 호출)
         for (const item of updatedRankings) {
             const productData = await apiRequest('GET', `https://yogibo.cafe24api.com/api/v2/admin/products`, {}, { product_no: item.product_no });
 
@@ -326,7 +331,6 @@ async function initializeServer() {
         }
     }
 }
-
 
 app.get('/api/products', async (req, res) => {
     let client;
@@ -359,7 +363,7 @@ app.listen(PORT, async () => {
     // MongoDB에서 최신 토큰 가져오기
     await getTokensFromDB();
 
-    // 3일 간격 00시 스케줄링 이며 해당 서버의 경우 매일 1회 실행되게 설정 00시
+    // 스케줄: 매일 00시 실행 (필요에 따라 '0 0 */3 * *' 등으로 수정 가능)
     schedule.scheduleJob('0 0 */1 * *', async () => {
         console.log('스케줄 작업 실행: 데이터 초기화 시작');
         await initializeServer();
