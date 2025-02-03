@@ -20,7 +20,7 @@ const dbName = process.env.DB_NAME;             // MongoDB Database Name
 const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name (상품 데이터 저장)
 const tokenCollectionName = 'tokens';           // MongoDB Token Collection Name
 const rankingCollectionName = 'rankings';       // MongoDB 순위 Collection Name
-const MALLID = process.env.MALLID;              // 예: "yourmallid"
+const MALLID =yogibo;              // 예: "yourmallid"
 const CATEGORY_NO = process.env.CATEGORY_NO || 858; // 카테고리 번호 (예: 858)
 
 app.use(cors());
