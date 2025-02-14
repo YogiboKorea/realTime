@@ -10,8 +10,8 @@ const schedule = require('node-schedule');
 const app = express();
 const PORT = 8014;
 
-let accessToken = 'l6QFHJvcIRnjVck8yhKdRD';
-let refreshToken = 'IirsvBqzKRIuyeNQdWLCfO';
+let accessToken = 'YdjJJOgeZqlbNJxB0npW8D';
+let refreshToken = 'LkkTatzBMlfEdSrdOgl8fN';
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -41,7 +41,7 @@ async function getTokensFromDB() {
             refreshToken = tokens.refreshToken;
             console.log('MongoDB에서 토큰 로드 성공:', tokens);
         } else {
-            console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용');
+            console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용 데이터 추가');
         }
     } finally {
         await client.close();
