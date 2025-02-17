@@ -10,8 +10,8 @@ const schedule = require('node-schedule');
 const app = express();
 const PORT = 8014;
 
-let accessToken = 'vQwGjqvyOdFhbMqeV21r6G';
-let refreshToken = '7SAU6XJTIxGhQpfKZCfstG';
+let accessToken = 'NPdcwjIVDBykxBPiUNII7B';
+let refreshToken = 'kCgTHFIpCNAgOdUgkKfBIC';
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -24,7 +24,7 @@ const MALLID = 'yogibo';              // 예: "yourmallid"
 const CATEGORY_NO = process.env.CATEGORY_NO || 858; // 카테고리 번호 (예: 858)
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json())
 
 // --- 토큰 관리 관련 함수 ---
 
