@@ -337,10 +337,14 @@ app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
     await getTokensFromDB();
     // 스케줄: 매일 00시 실행 (원하는 주기로 수정 가능)
-    schedule.scheduleJob('0 0 */1 * *', async () => {
-        console.log('스케줄 작업 실행: 데이터 초기화 시작');
-        await initializeServer();
-        console.log('스케줄 작업 완료: 데이터 초기화 완료');
+    schedule.scheduleJob('0 0 * * *', async () => {
+        console.log('스케줄 작업 실행: 토큰 갱신 시작');
+        try {
+            await refreshAccessToken();
+            console.log('토큰 갱신 완료');
+        } catch (error) {
+            console.error('토큰 갱신 중 오류 발생:', error.message);
+        }
     });
     await initializeServer();
 });
