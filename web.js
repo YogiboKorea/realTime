@@ -332,12 +332,11 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// 서버 시작 및 스케줄 등록
 app.listen(PORT, async () => {
     console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
     await getTokensFromDB();
-    // 스케줄: 매일 00시 실행 (원하는 주기로 수정 가능)
-    schedule.scheduleJob('0 0 * * *', async () => {
+    // 스케줄: 매 시간 정각에 실행
+    schedule.scheduleJob('0 * * * *', async () => {
         console.log('스케줄 작업 실행: 토큰 갱신 시작');
         try {
             await refreshAccessToken();
