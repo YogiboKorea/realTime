@@ -1,59 +1,115 @@
-// 필요한 모듈 불러오기
+// --- 1. 필요한 모듈 불러오기 ---
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config();
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb'); // ObjectId 추가
 const cors = require('cors');
 const moment = require('moment-timezone');
 const schedule = require('node-schedule');
+const multer = require('multer');
+const ftp = require('ftp');
+const crypto = require('crypto');
+require('dotenv').config();
+const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
 
+// --- 2. Express 앱 및 포트 설정 ---
 const app = express();
-const PORT = 8014;
+const PORT = 8014; // 8014 포트로 통일
 
-let accessToken = 'B6sxr1WrHxujGvWbteE2JB';
-let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB';
+// --- 3. 전역 변수 및 .env 설정 ---
+
+// Cafe24 API 및 랭킹 관련
+let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; // 초기값
+let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; // 초기값
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
-const mongoUri = process.env.MONGO_URI;         // MongoDB URI
-const dbName = process.env.DB_NAME;             // MongoDB Database Name
-const collectionName = process.env.COLLECTION_NAME; // MongoDB Collection Name (상품 데이터 저장)
-const tokenCollectionName = 'tokens';           // MongoDB Token Collection Name
-const rankingCollectionName = 'rankings';       // MongoDB 순위 Collection Name
-const MALLID = 'yogibo';              // 예: "yourmallid"
-const CATEGORY_NO = process.env.CATEGORY_NO || 858; // 카테고리 번호 (예: 858)
+const mongoUri = process.env.MONGO_URI;
+const dbName = process.env.DB_NAME;
+const collectionName = process.env.COLLECTION_NAME; // 랭킹 상품 데이터
+const tokenCollectionName = 'tokens';
+const rankingCollectionName = 'rankings';
+const MALLID = 'yogibo';
+const CATEGORY_NO = process.env.CATEGORY_NO || 858;
 
-app.use(cors());
-app.use(express.json())
+// MongoDB 클라이언트 (전역)
+const mongoClient = new MongoClient(mongoUri, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+});
+let db; // 전역 DB 객체
 
-// --- 토큰 관리 관련 함수 ---
+// FTP 및 Multer 관련
+const ftpConfig = {
+    host: process.env.FTP_HOST,
+    user: process.env.FTP_USER,
+    password: process.env.FTP_PASSWORD,
+};
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+const ftpClient = new ftp();
 
-// MongoDB에서 토큰 읽기
+// --- 4. 미들웨어 설정 ---
+app.use(express.json({ limit: '50mb' })); // 용량 제한 설정
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(cors({
+    origin: '*', // CORS 설정
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+}));
+
+// --- 5. FTP 업로드 함수 ---
+const uploadToFTP = (fileBuffer, remotePath) => {
+    return new Promise((resolve, reject) => {
+        const client = new ftp(); // 새 클라이언트 인스턴스 생성
+        client.on('ready', () => {
+            console.log('FTP 연결 성공');
+            client.put(fileBuffer, remotePath, (err) => {
+                if (err) {
+                    console.error('FTP 업로드 오류:', err);
+                    reject('FTP 업로드 오류: ' + err.message);
+                } else {
+                    console.log('FTP 업로드 성공:', remotePath);
+                    resolve('FTP 업로드 성공');
+                }
+                client.end();
+            });
+        });
+        client.on('error', (err) => {
+            console.error('FTP 연결 오류:', err);
+            reject('FTP 연결 오류: ' + err.message);
+        });
+        client.on('close', (hadError) => {
+            if (hadError) console.error('FTP 비정상적 종료');
+            // console.log('FTP 연결 종료');
+        });
+        client.connect(ftpConfig);
+    });
+};
+
+
+// --- 6. Cafe24 API 및 랭킹 관련 함수 (MongoDB 리팩터링) ---
+
+// MongoDB에서 토큰 읽기 (전역 db 사용)
 async function getTokensFromDB() {
-    const client = new MongoClient(mongoUri);
     try {
-        await client.connect();
-        const db = client.db(dbName);
         const collection = db.collection(tokenCollectionName);
         const tokens = await collection.findOne({ name: 'cafe24Tokens' });
         if (tokens) {
             accessToken = tokens.accessToken;
             refreshToken = tokens.refreshToken;
-            console.log('MongoDB에서 토큰 로드 성공:', tokens);
+            console.log('MongoDB에서 토큰 로드 성공');
         } else {
-            console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용 데이터 추가');
+            console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용.');
         }
-    } finally {
-        await client.close();
+    } catch (error) {
+        console.error('getTokensFromDB 오류:', error);
     }
 }
 
-// MongoDB에 토큰 저장
+// MongoDB에 토큰 저장 (전역 db 사용)
 async function saveTokensToDB(newAccessToken, newRefreshToken) {
-    const client = new MongoClient(mongoUri);
     try {
-        await client.connect();
-        const db = client.db(dbName);
         const collection = db.collection(tokenCollectionName);
         await collection.updateOne(
             { name: 'cafe24Tokens' },
@@ -68,8 +124,8 @@ async function saveTokensToDB(newAccessToken, newRefreshToken) {
             { upsert: true }
         );
         console.log('MongoDB에 토큰 저장 완료');
-    } finally {
-        await client.close();
+    } catch (error) {
+        console.error('saveTokensToDB 오류:', error);
     }
 }
 
@@ -89,11 +145,10 @@ async function refreshAccessToken() {
         );
         const newAccessToken = response.data.access_token;
         const newRefreshToken = response.data.refresh_token;
-        console.log('Access Token 갱신 성공:', newAccessToken);
-        console.log('Refresh Token 갱신 성공:', newRefreshToken);
+        console.log('Access Token 갱신 성공');
         await saveTokensToDB(newAccessToken, newRefreshToken);
-        accessToken = newAccessToken;
-        refreshToken = newRefreshToken;
+        accessToken = newAccessToken; // 전역 변수 업데이트
+        refreshToken = newRefreshToken; // 전역 변수 업데이트
         return newAccessToken;
     } catch (error) {
         if (error.response?.data?.error === 'invalid_grant') {
@@ -105,7 +160,7 @@ async function refreshAccessToken() {
     }
 }
 
-// API 요청 함수
+// API 요청 함수 (토큰 만료 시 자동 갱신)
 async function apiRequest(method, url, data = {}, params = {}) {
     try {
         const response = await axios({
@@ -122,16 +177,14 @@ async function apiRequest(method, url, data = {}, params = {}) {
     } catch (error) {
         if (error.response?.status === 401) {
             console.log('Access Token 만료. 갱신 중...');
-            await refreshAccessToken();
-            return apiRequest(method, url, data, params);
+            await refreshAccessToken(); // 갱신
+            return apiRequest(method, url, data, params); // 재시도
         } else {
             console.error('API 요청 오류:', error.response ? error.response.data : error.message);
             throw error;
         }
     }
 }
-
-// --- 카테고리 상품 및 판매 데이터 관련 함수 ---
 
 // 1. 카테고리 상품 목록 조회
 async function getCategoryProducts(category_no) {
@@ -168,22 +221,16 @@ async function getSalesDataForProducts(productNos, start_date, end_date) {
 
 // 3. 판매 순위 계산 및 정렬
 function calculateAndSortRanking(categoryProducts, salesData) {
-    // 카테고리 상품의 product_no 목록 생성
     const productNosSet = new Set(categoryProducts.map(p => p.product_no));
-    // 판매 데이터 중 해당 카테고리 상품에 해당하는 데이터만 필터링
     const filteredSales = salesData.filter(item => productNosSet.has(item.product_no));
     
-    // 동일 상품번호의 데이터 합산 (판매 수량, 판매 금액)
     const mergedData = filteredSales.reduce((acc, curr) => {
-        // 기존 데이터가 있다면 합산
         const existing = acc.find(item => item.product_no === curr.product_no);
-        // product_price를 숫자로 처리 (문자열일 경우 replace 후 파싱, 숫자일 경우 그대로 사용)
         const currPrice = typeof curr.product_price === 'string' 
-                          ? parseInt(curr.product_price.replace(/,/g, ''), 10)
-                          : curr.product_price;
+                            ? parseInt(curr.product_price.replace(/,/g, ''), 10)
+                            : curr.product_price;
         if (existing) {
             existing.total_sales += parseInt(curr.total_sales, 10);
-            // 기존 product_price가 숫자형이므로 그대로 합산
             existing.product_price += currPrice;
         } else {
             acc.push({
@@ -195,13 +242,11 @@ function calculateAndSortRanking(categoryProducts, salesData) {
         return acc;
     }, []);
     
-    // 각 상품별 계산된 총 판매 금액 (판매금액 * 판매수량)
     const rankedData = mergedData.map(item => ({
         ...item,
         calculated_total_price: item.product_price * item.total_sales
     }));
     
-    // 내림차순 정렬 및 순위 번호 부여
     rankedData.sort((a, b) => b.calculated_total_price - a.calculated_total_price);
     rankedData.forEach((item, index) => {
         item.rank = index + 1;
@@ -210,12 +255,9 @@ function calculateAndSortRanking(categoryProducts, salesData) {
     return rankedData;
 }
 
-// --- 순위 변동 비교 함수 (기존 코드 유지) ---
+// 4. 순위 변동 비교 함수 (전역 db 사용)
 async function compareRankings(newRankings) {
-    const client = new MongoClient(mongoUri);
     try {
-        await client.connect();
-        const db = client.db(dbName);
         const collection = db.collection(rankingCollectionName);
         const previousRankings = await collection.find({}).toArray();
         const updatedRankings = newRankings.map((item, index) => {
@@ -236,20 +278,20 @@ async function compareRankings(newRankings) {
         });
         await collection.deleteMany({});
         await collection.insertMany(updatedRankings);
-        console.log('순위 비교 및 저장 완료:', updatedRankings);
+        console.log('순위 비교 및 저장 완료');
         return updatedRankings;
-    } finally {
-        await client.close();
+    } catch (error) {
+        console.error('compareRankings 오류:', error);
+        throw error;
     }
 }
 
-// --- 전체 플로우: 카테고리 기반 판매 순위 처리 및 DB 저장 ---
+// 5. 전체 플로우: 카테고리 기반 판매 순위 처리 및 DB 저장 (전역 db 사용)
 async function initializeServer() {
     const now = moment().tz('Asia/Seoul');
     const start_date = now.clone().subtract(3, 'days').format('YYYY-MM-DD 00:00:00');
     const end_date = now.format('YYYY-MM-DD 23:59:59');
 
-    let client;
     try {
         console.log(`데이터 수집 및 저장 시작: ${start_date} ~ ${end_date}`);
 
@@ -271,15 +313,12 @@ async function initializeServer() {
 
         // 3. 판매 순위 계산 및 정렬
         const rankedData = calculateAndSortRanking(categoryProducts, salesData);
-        console.log('계산된 순위 데이터:', rankedData);
+        console.log('계산된 순위 데이터:', rankedData.length, '개');
 
         // 4. 순위 변동 비교 및 DB 저장 (rankingCollectionName)
         const updatedRankings = await compareRankings(rankedData);
 
         // 5. 상품 상세정보 조회 후 최종 결과 DB 저장 (collectionName)
-        client = new MongoClient(mongoUri);
-        await client.connect();
-        const db = client.db(dbName);
         const collection = db.collection(collectionName);
         await collection.deleteMany({});
 
@@ -306,44 +345,458 @@ async function initializeServer() {
         console.log('카테고리 기반 상위 상품 데이터가 성공적으로 저장되었습니다.');
     } catch (error) {
         console.error('서버 초기화 중 오류 발생:', error.message);
-    } finally {
-        if (client) {
-            await client.close();
-        }
     }
 }
 
+// --- 7. API 라우트 (엔드포인트) 정의 ---
+
+// --- 랭킹 서버 라우트 (File 1) ---
 app.get('/api/products', async (req, res) => {
-    let client;
     try {
-        client = new MongoClient(mongoUri);
-        await client.connect();
-        const db = client.db(dbName);
-        const collection = db.collection(collectionName);
+        const collection = db.collection(collectionName); // 전역 db 사용
         const products = await collection.find({}).toArray();
         res.json(products);
     } catch (error) {
-        console.error('MongoDB에서 데이터를 가져오는 중 오류 발생:', error.message);
+        console.error('MongoDB에서 랭킹 데이터를 가져오는 중 오류 발생:', error.message);
         res.status(500).send('데이터를 가져오는 중 오류가 발생했습니다.');
-    } finally {
-        if (client) {
-            await client.close();
-        }
     }
 });
 
-app.listen(PORT, async () => {
-    console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
-    await getTokensFromDB();
-    // 스케줄: 매 시간 정각에 실행
-    schedule.scheduleJob('0 * * * *', async () => {
-        console.log('스케줄 작업 실행: 토큰 갱신 시작');
-        try {
-            await refreshAccessToken();
-            console.log('토큰 갱신 완료');
-        } catch (error) {
-            console.error('토큰 갱신 중 오류 발생:', error.message);
+// --- 이미지/캡처 서버 라우트 (File 2) ---
+app.post('/save-product', upload.single('image'), async (req, res) => {
+    try {
+        const products = JSON.parse(req.body.products);
+        const imageFile = req.file;
+
+        if (!imageFile) {
+            throw new Error('이미지 파일이 없습니다.');
         }
-    });
-    await initializeServer();
+
+        const randomString = crypto.randomBytes(16).toString('hex');
+        const fileExtension = imageFile.originalname.split('.').pop();
+        const remotePath = `/web/img/sns/${Date.now()}.${fileExtension}`;
+
+        const existingDocument = await db.collection('products').findOne({ imagePath: { $regex: randomString } });
+
+        try {
+            await uploadToFTP(imageFile.buffer, remotePath);
+        } catch (ftpErr) {
+            console.error('FTP 오류:', ftpErr);
+            return res.status(500).json({ success: false, message: ftpErr });
+        }
+
+        if (existingDocument) {
+            await db.collection('products').updateOne(
+                { _id: existingDocument._id },
+                { $push: { products: { $each: products } } }
+            );
+            res.json({ success: true, message: '기존 이미지에 제품이 추가되었습니다.' });
+        } else {
+            const newDocument = {
+                imagePath: remotePath,
+                products,
+            };
+            const result = await db.collection('products').insertOne(newDocument);
+            res.json({ success: true, documentId: result.insertedId });
+        }
+    } catch (err) {
+        console.error('상품 저장 오류:', err);
+        res.status(500).json({ success: false, message: '상품 저장 오류' });
+    }
 });
+
+app.get('/get-products', async (req, res) => {
+    const { limit = 12, skip = 0 } = req.query;
+    try {
+        const products = await db.collection('products')
+            .find()
+            .sort({ _id: -1 })
+            .skip(parseInt(skip))
+            .limit(parseInt(limit))
+            .toArray();
+        res.json({ success: true, products });
+    } catch (err) {
+        console.error('상품 불러오기 오류:', err);
+        res.status(500).json({ success: false, message: '상품 불러오기 오류' });
+    }
+});
+
+app.get('/get-big-image', async (req, res) => {
+    try {
+        const bigImage = await db.collection('big_images').findOne({}, { sort: { createdAt: -1 } });
+
+        if (bigImage) {
+            res.json({ success: true, imagePath: bigImage.imagePath, products: bigImage.products });
+        } else {
+            res.json({ success: false, message: '큰 화면 이미지가 존재하지 않습니다.' });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, message: '큰화면 이미지 불러오기 오류', error: err.message });
+    }
+});
+
+app.post('/save-big-image', upload.single('image'), async (req, res) => {
+    try {
+        console.log('파일 업로드 요청 수신');
+        const imageFile = req.file;
+        if (!imageFile) {
+            console.error('이미지 파일이 없습니다.');
+            return res.status(400).json({ success: false, message: '이미지 파일이 없습니다.' });
+        }
+
+        const randomString = crypto.randomBytes(16).toString('hex');
+        const fileExtension = imageFile.originalname.split('.').pop();
+        const remotePath = `/web/img/sns/big/${Date.now()}_${randomString}.${fileExtension}`;
+
+        console.log('FTP 업로드 경로:', remotePath);
+
+        await uploadToFTP(imageFile.buffer, remotePath);
+        console.log('FTP 업로드 성공');
+
+        const existingBigImage = await db.collection('big_images').findOne({});
+        if (existingBigImage) {
+            console.log('기존 큰화면 이미지 업데이트');
+            await db.collection('big_images').updateOne(
+                { _id: existingBigImage._id },
+                { $set: { imagePath: remotePath, updatedAt: new Date() } }
+            );
+        } else {
+            console.log('새로운 큰화면 이미지 추가');
+            await db.collection('big_images').insertOne({
+                imagePath: remotePath,
+                createdAt: new Date(),
+            });
+        }
+
+        res.json({ success: true, imagePath: remotePath });
+    } catch (err) {
+        console.error('큰화면 이미지 저장 오류:', err);
+        res.status(500).json({ success: false, message: '큰화면 이미지 저장 오류' });
+    }
+});
+
+app.delete('/delete-product/:id', async (req, res) => {
+    const productId = req.params.id;
+    try {
+        const result = await db.collection('products').deleteOne({ _id: new ObjectId(productId) });
+        if (result.deletedCount === 1) {
+            res.json({ success: true });
+        } else {
+            res.json({ success: false, message: '삭제 실패' });
+        }
+    } catch (err) {
+        console.error('상품 삭제 오류:', err);
+        res.status(500).json({ success: false, message: '상품 삭제 오류' });
+    }
+});
+
+app.post('/upload-capture', async (req, res) => {
+    try {
+        const { image, memberId } = req.body;
+
+        if (!image) {
+            console.error('요청 데이터 누락: image');
+            return res.status(400).json({ success: false, message: '요청 데이터 누락: image가 없습니다.' });
+        }
+
+        const memberIdentifier = memberId || "null";
+        const base64Data = image.replace(/^data:image\/png;base64,/, "");
+        const fileBuffer = Buffer.from(base64Data, 'base64');
+
+        const remotePath = `/web/img/captures/${memberIdentifier}_${new Date().toLocaleString("ko-KR", {
+            timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+        }).replace(/[^0-9]/g, "")}.png`;
+
+        await uploadToFTP(fileBuffer, remotePath);
+
+        const captureData = {
+            imagePath: remotePath,
+            createdAt: new Date(),
+            memberId: memberIdentifier,
+            likes: 0,
+            likedBy: [],
+        };
+
+        const result = await db.collection('captures').insertOne(captureData);
+        res.json({ success: true, imagePath: remotePath, documentId: result.insertedId });
+    } catch (err) {
+        console.error('캡처 업로드 처리 오류:', err);
+        res.status(500).json({ success: false, message: '캡처 업로드 처리 오류' });
+    }
+});
+
+app.post('/upload-capture/kakao', async (req, res) => {
+    try {
+        const { image, memberId } = req.body;
+
+        if (!image) {
+            console.error('요청 데이터 누락: image');
+            return res.status(400).json({ success: false, message: '요청 데이터 누락: image가 없습니다.' });
+        }
+
+        const memberIdentifier = memberId || "null";
+        const base64Data = image.replace(/^data:image\/png;base64,/, "");
+        const fileBuffer = Buffer.from(base64Data, 'base64');
+
+        const remotePath = `/web/img/captures/kakao/${memberIdentifier}_${new Date().toLocaleString("ko-KR", {
+            timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+        }).replace(/[^0-9]/g, "")}.png`;
+
+        await uploadToFTP(fileBuffer, remotePath);
+
+        const captureData = {
+            imagePath: remotePath,
+            createdAt: new Date(),
+            memberId: memberIdentifier,
+            likes: 0,
+            likedBy: [],
+        };
+
+        const result = await db.collection('kakaoCapture').insertOne(captureData);
+        res.json({ success: true, imagePath: remotePath, documentId: result.insertedId });
+    } catch (err) {
+        console.error('캡처 업로드 처리 오류:', err);
+        res.status(500).json({ success: false, message: '캡처 업로드 처리 오류' });
+    }
+});
+
+app.get('/get-latest-capture/kakao', async (req, res) => {
+    try {
+        const latestCapture = await db.collection('kakaoCapture').findOne({}, { sort: { createdAt: -1 } });
+        if (latestCapture) {
+            res.json({ success: true, imagePath: latestCapture.imagePath });
+        } else {
+            res.json({ success: false, message: '캡처된 이미지가 없습니다.' });
+        }
+    } catch (err) {
+        console.error('최신 캡처 조회 오류:', err);
+        res.status(500).json({ success: false, message: '최신 캡처 조회 오류' });
+    }
+});
+
+app.get('/get-captures', async (req, res) => {
+    try {
+        const { limit = 10, skip = 0 } = req.query;
+        const captures = await db.collection('captures')
+            .find()
+            .sort({ createdAt: -1 })
+            .skip(parseInt(skip))
+            .limit(parseInt(limit))
+            .toArray();
+
+        res.json({ success: true, captures });
+    } catch (err) {
+        console.error('캡처 조회 오류:', err);
+        res.status(500).json({ success: false, message: '캡처 조회 오류' });
+    }
+});
+
+app.get('/get-latest-capture', async (req, res) => {
+    try {
+        const latestCapture = await db.collection('captures').findOne({}, { sort: { createdAt: -1 } });
+        if (latestCapture) {
+            res.json({ success: true, imagePath: latestCapture.imagePath });
+        } else {
+            res.json({ success: false, message: '캡처된 이미지가 없습니다.' });
+        }
+    } catch (err) {
+        console.error('최신 캡처 조회 오류:', err);
+        res.status(500).json({ success: false, message: '최신 캡처 조회 오류' });
+    }
+});
+
+app.get('/get-images', async (req, res) => {
+    try {
+        const { limit = 10, skip = 0 } = req.query;
+        const images = await db.collection('captures')
+            .find()
+            .sort({ createdAt: -1 })
+            .skip(parseInt(skip))
+            .limit(parseInt(limit))
+            .toArray();
+
+        res.json({ success: true, images });
+    } catch (err) {
+        console.error('이미지 데이터 불러오기 오류:', err);
+        res.status(500).json({ success: false, message: '이미지 데이터를 불러오는 중 오류가 발생했습니다.' });
+    }
+});
+
+app.post('/like-image', async (req, res) => {
+    try {
+        const { imageId, memberId } = req.body;
+
+        if (!imageId || !memberId) {
+            return res.status(400).json({ success: false, message: '잘못된 요청입니다.' });
+        }
+
+        const image = await db.collection('captures').findOne({ _id: new ObjectId(imageId) });
+        if (!image) {
+            return res.status(404).json({ success: false, message: '이미지를 찾을 수 없습니다.' });
+        }
+
+        const isLiked = image.likedBy.includes(memberId);
+
+        if (isLiked) {
+            // 좋아요 취소
+            const result = await db.collection('captures').updateOne(
+                { _id: new ObjectId(imageId) },
+                {
+                    $inc: { likes: -1 },
+                    $pull: { likedBy: memberId },
+                }
+            );
+            res.json({ success: true, message: '좋아요가 취소되었습니다.', liked: false });
+        } else {
+            // 좋아요 추가
+            const result = await db.collection('captures').updateOne(
+                { _id: new ObjectId(imageId) },
+                {
+                    $inc: { likes: 1 },
+                    $push: { likedBy: memberId },
+                }
+            );
+            res.json({ success: true, message: '좋아요가 추가되었습니다!', liked: true });
+        }
+    } catch (err) {
+        console.error('좋아요 처리 오류:', err);
+        res.status(500).json({ success: false, message: '좋아요 처리 중 오류가 발생했습니다.' });
+    }
+});
+
+app.get('/get-like-status', async (req, res) => {
+    try {
+        const { imageId, memberId } = req.query;
+
+        if (!imageId || !memberId) {
+            return res.status(400).json({ success: false, message: '잘못된 요청입니다.' });
+        }
+
+        const image = await db.collection('captures').findOne({ _id: new ObjectId(imageId) });
+
+        if (!image) {
+            return res.status(404).json({ success: false, message: '이미지를 찾을 수 없습니다.' });
+        }
+
+        const isLiked = image.likedBy.includes(memberId);
+        res.json({ success: true, liked: isLiked });
+    } catch (err) {
+        console.error('좋아요 상태 확인 오류:', err);
+        res.status(500).json({ success: false, message: '좋아요 상태 확인 중 오류가 발생했습니다.' });
+    }
+});
+
+app.get('/get-top-images', async (req, res) => {
+    try {
+        const topImages = await db.collection('captures')
+            .find()
+            .sort({ likes: -1, createdAt: -1 })
+            .limit(3)
+            .toArray();
+
+        res.json({ success: true, images: topImages });
+    } catch (err) {
+        console.error('추천 이미지 불러오기 오류:', err);
+        res.status(500).json({ success: false, message: '추천 이미지 불러오기 오류' });
+    }
+});
+
+app.delete('/delete-image', async (req, res) => {
+    const { imagePath, memberId } = req.body;
+    try {
+        const image = await db.collection('captures').findOne({ imagePath });
+
+        if (!image) {
+            return res.status(404).json({ success: false, message: '이미지를 찾을 수 없습니다.' });
+        }
+        if (image.memberId !== memberId && memberId !== 'testid') {
+            return res.status(403).json({ success: false, message: '삭제 권한이 없습니다.' });
+        }
+
+        await db.collection('captures').deleteOne({ imagePath });
+        res.json({ success: true, message: '이미지가 삭제되었습니다.' });
+    } catch (error) {
+        console.error('이미지 삭제 중 오류:', error);
+        res.status(500).json({ success: false, message: '이미지 삭제 중 오류가 발생했습니다.' });
+    }
+});
+
+app.get('/download-excel', async (req, res) => {
+    try {
+        const captures = await db.collection('captures').find().toArray();
+
+        if (!captures.length) {
+            return res.status(404).json({ success: false, message: '다운로드할 데이터가 없습니다.' });
+        }
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Captures');
+
+        worksheet.columns = [
+            { header: 'ID', key: '_id', width: 30 },
+            { header: 'Image Path', key: 'imagePath', width: 50 },
+            { header: 'Member ID', key: 'memberId', width: 20 },
+            { header: 'Likes', key: 'likes', width: 10 },
+            { header: 'Created At', key: 'createdAt', width: 25 },
+        ];
+
+        captures.forEach(capture => {
+            worksheet.addRow({
+                _id: capture._id.toString(),
+                imagePath: capture.imagePath,
+                memberId: capture.memberId || 'N/A',
+                likes: capture.likes,
+                createdAt: capture.createdAt ? new Date(capture.createdAt).toLocaleString('ko-KR') : 'N/A',
+            });
+        });
+
+        const filePath = path.join(__dirname, 'captures.xlsx');
+        await workbook.xlsx.writeFile(filePath);
+
+        res.download(filePath, 'captures.xlsx', (err) => {
+            if (err) {
+                console.error('엑셀 파일 다운로드 오류:', err);
+            }
+            fs.unlinkSync(filePath); // 다운로드 후 파일 삭제
+        });
+
+    } catch (err) {
+        console.error('엑셀 생성 오류:', err);
+        res.status(500).json({ success: false, message: '엑셀 파일 생성 오류' });
+    }
+});
+
+// --- 8. 서버 시작 ---
+mongoClient.connect()
+    .then(client => {
+        console.log('MongoDB 연결 성공');
+        db = client.db(dbName); // 전역 db 객체 할당
+
+        // MongoDB 연결 후에 서버 리스닝 시작
+        app.listen(PORT, async () => {
+            console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+            
+            // 랭킹 서버 초기화 로직 (Cafe24)
+            await getTokensFromDB(); // DB에서 토큰 로드
+
+            // 스케줄: 매 시간 정각에 토큰 갱신
+            schedule.scheduleJob('0 * * * *', async () => {
+                console.log('스케줄 작업 실행: 토큰 갱신 시작');
+                try {
+                    await refreshAccessToken();
+                    console.log('토큰 갱신 완료');
+                } catch (error) {
+                    console.error('스케줄된 토큰 갱신 중 오류 발생:', error.message);
+                }
+            });
+
+            // 서버 시작 시 랭킹 데이터 1회 초기화
+            await initializeServer();
+        });
+    })
+    .catch(err => {
+        console.error('MongoDB 연결 실패:', err);
+        process.exit(1); // MongoDB 연결 실패 시 서버 종료
+    });
