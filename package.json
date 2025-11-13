@@ -13,13 +13,16 @@
     "corn": "^0.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.20.0",
     "ftp": "^0.3.10",
+    "install": "^0.13.0",
     "moment-timezone": "^0.5.46",
     "mongodb": "^6.11.0",
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
     "node-schedule": "^2.1.1",
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "npm": "^11.6.2"
   }
 }
