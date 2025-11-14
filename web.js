@@ -10,7 +10,7 @@ const ftp = require('ftp');
 const crypto = require('crypto');
 require('dotenv').config();
 const ExcelJS = require('exceljs');
-const fs =fs;
+const fs = require('fs');
 const path = require('path');
 
 // --- 2. Express 앱 및 포트 설정 ---
