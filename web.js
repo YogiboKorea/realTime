@@ -10,7 +10,7 @@ const ftp = require('ftp');
 const crypto = require('crypto');
 require('dotenv').config();
 const ExcelJS = require('exceljs');
-const fs = require('fs');
+const fs = require('fs'); // 👈 [수정] 'fs' 모듈 불러오기 수정
 const path = require('path');
 
 // --- 2. Express 앱 및 포트 설정 ---
@@ -30,7 +30,7 @@ const dbName = process.env.DB_NAME;
 const collectionName = process.env.COLLECTION_NAME; // 랭킹 상품 데이터
 const tokenCollectionName = 'tokens';
 const rankingCollectionName = 'rankings';
-const analyticsCollectionName = 'anaylist'; // 👈 [추가] 애널리틱스 데이터 컬렉션
+const analyticsCollectionName = 'anaylist'; // 👈 애널리틱스 데이터 컬렉션
 const MALLID = 'yogibo';
 const CATEGORY_NO = process.env.CATEGORY_NO || 858;
 
@@ -287,7 +287,7 @@ async function compareRankings(newRankings) {
     }
 }
 
-// 👈 --- [신규] Cafe24 애널리틱스 관련 함수 ---
+// --- [신규] Cafe24 애널리틱스 관련 함수 ---
 
 const DATA_API_BASE_URL = 'https://ca-api.cafe24data.com';
 
@@ -346,9 +346,7 @@ async function fetchAndStoreDailyAnalytics() {
         const pageViewData = await dataApiRequest('GET', '/pages/view', {
             start_date: yesterday,
             end_date: yesterday,
-            // Cafe24 Data API 문서에 따라, 디바이스 타입 등 세부 항목이 필요하면
-            // dimensions 파라미터 등을 추가해야 할 수 있습니다.
-            // 예: dimensions: 'device_type'
+            // dimensions: 'device_type' // 필요시 '디바이스별' 등 차원 추가
         });
 
         // MongoDB에 저장 (날짜와 타입 기준으로 덮어쓰기)
@@ -404,7 +402,6 @@ async function initializeServer() {
             return;
         }
         const productNos = categoryProducts.map(p => p.product_no);
-        console.log('카테고리 상품 번호:', productNos);
 
         // 2. 판매 데이터 조회
         const salesData = await getSalesDataForProducts(productNos, start_date, end_date);
@@ -415,7 +412,6 @@ async function initializeServer() {
 
         // 3. 판매 순위 계산 및 정렬
         const rankedData = calculateAndSortRanking(categoryProducts, salesData);
-        console.log('계산된 순위 데이터:', rankedData.length, '개');
 
         // 4. 순위 변동 비교 및 DB 저장 (rankingCollectionName)
         const updatedRankings = await compareRankings(rankedData);
@@ -439,7 +435,6 @@ async function initializeServer() {
                     rankChange: item.rankChange,
                     rank: item.rank,
                 });
-                console.log(`상품 번호 ${product.product_no} 데이터 저장 완료`);
             } else {
                 console.error(`상품 번호 ${item.product_no} 데이터를 찾을 수 없습니다.`);
             }
@@ -452,7 +447,7 @@ async function initializeServer() {
 
 // --- 7. API 라우트 (엔드포인트) 정의 ---
 
-// --- 랭킹 서버 라우트 (File 1) ---
+// --- 랭킹 서버 라우트 ---
 app.get('/api/products', async (req, res) => {
     try {
         const collection = db.collection(collectionName); // 전역 db 사용
@@ -464,7 +459,7 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// --- 이미지/캡처 서버 라우트 (File 2) ---
+// --- 이미지/캡처 서버 라우트 ---
 app.post('/save-product', upload.single('image'), async (req, res) => {
     try {
         const products = JSON.parse(req.body.products);
@@ -539,10 +534,8 @@ app.get('/get-big-image', async (req, res) => {
 
 app.post('/save-big-image', upload.single('image'), async (req, res) => {
     try {
-        console.log('파일 업로드 요청 수신');
         const imageFile = req.file;
         if (!imageFile) {
-            console.error('이미지 파일이 없습니다.');
             return res.status(400).json({ success: false, message: '이미지 파일이 없습니다.' });
         }
 
@@ -550,26 +543,20 @@ app.post('/save-big-image', upload.single('image'), async (req, res) => {
         const fileExtension = imageFile.originalname.split('.').pop();
         const remotePath = `/web/img/sns/big/${Date.now()}_${randomString}.${fileExtension}`;
 
-        console.log('FTP 업로드 경로:', remotePath);
-
         await uploadToFTP(imageFile.buffer, remotePath);
-        console.log('FTP 업로드 성공');
 
         const existingBigImage = await db.collection('big_images').findOne({});
         if (existingBigImage) {
-            console.log('기존 큰화면 이미지 업데이트');
             await db.collection('big_images').updateOne(
                 { _id: existingBigImage._id },
                 { $set: { imagePath: remotePath, updatedAt: new Date() } }
             );
         } else {
-            console.log('새로운 큰화면 이미지 추가');
             await db.collection('big_images').insertOne({
                 imagePath: remotePath,
                 createdAt: new Date(),
             });
         }
-
         res.json({ success: true, imagePath: remotePath });
     } catch (err) {
         console.error('큰화면 이미지 저장 오류:', err);
@@ -597,7 +584,6 @@ app.post('/upload-capture', async (req, res) => {
         const { image, memberId } = req.body;
 
         if (!image) {
-            console.error('요청 데이터 누락: image');
             return res.status(400).json({ success: false, message: '요청 데이터 누락: image가 없습니다.' });
         }
 
@@ -633,7 +619,6 @@ app.post('/upload-capture/kakao', async (req, res) => {
         const { image, memberId } = req.body;
 
         if (!image) {
-            console.error('요청 데이터 누락: image');
             return res.status(400).json({ success: false, message: '요청 데이터 누락: image가 없습니다.' });
         }
 
@@ -743,22 +728,16 @@ app.post('/like-image', async (req, res) => {
 
         if (isLiked) {
             // 좋아요 취소
-            const result = await db.collection('captures').updateOne(
+            await db.collection('captures').updateOne(
                 { _id: new ObjectId(imageId) },
-                {
-                    $inc: { likes: -1 },
-                    $pull: { likedBy: memberId },
-                }
+                { $inc: { likes: -1 }, $pull: { likedBy: memberId } }
             );
             res.json({ success: true, message: '좋아요가 취소되었습니다.', liked: false });
         } else {
             // 좋아요 추가
-            const result = await db.collection('captures').updateOne(
+            await db.collection('captures').updateOne(
                 { _id: new ObjectId(imageId) },
-                {
-                    $inc: { likes: 1 },
-                    $push: { likedBy: memberId },
-                }
+                { $inc: { likes: 1 }, $push: { likedBy: memberId } }
             );
             res.json({ success: true, message: '좋아요가 추가되었습니다!', liked: true });
         }
@@ -871,11 +850,11 @@ app.get('/download-excel', async (req, res) => {
 });
 
 
-// 👈 --- [신규] 애널리틱스 라우트 ---
+// --- [신규] 애널리틱스 라우트 ---
 
 /**
- * [Feature 1] UTM/태그 클릭 트래킹
- * 클라이언트에서 { "tagId": "my_utm_tag_123" } 형식으로 POST 요청
+ * [페이지 방문 트래킹] UTM, 내부이동, 직접방문 등
+ * 클라이언트(v4 스크립트)에서 { "tagId": "..." } 형식으로 POST 요청
  */
 app.post('/api/track-click', async (req, res) => {
     const { tagId } = req.body;
@@ -907,9 +886,10 @@ app.post('/api/track-click', async (req, res) => {
 });
 
 /**
- * 애널리틱스 데이터 조회
+ * 애널리틱스 데이터 조회 (날짜와 타입별)
  * 예: /api/analytics?date=2025-11-13&type=utm_clicks
  * 예: /api/analytics?date=2025-11-13&type=cafe24_page_views
+ * 예: /api/analytics?date=2025-11-13&type=cafe24_visit_paths
  */
 app.get('/api/analytics', async (req, res) => {
     const { date, type } = req.query;
@@ -970,8 +950,7 @@ mongoClient.connect()
                 }
             });
 
-            // 👈 [추가] 스케줄: 매일 새벽 2시 0분에 어제자 Cafe24 Analytics 데이터 수집
-            // (Cafe24 데이터가 보통 새벽 1~2시쯤 집계 완료되는 것을 가정)
+            // 스케줄: 매일 새벽 2시 0분에 어제자 Cafe24 Analytics 데이터 수집
             schedule.scheduleJob('0 2 * * *', async () => {
                 console.log('[스케줄] 일일 애널리틱스 데이터 수집 시작');
                 try {
