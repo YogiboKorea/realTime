@@ -926,6 +926,39 @@ app.get('/api/analytics/trigger-daily-fetch', async (req, res) => {
 });
 
 
+app.post('/api/track-path', async (req, res) => {
+    try {
+        const { sessionId, step, page, source } = req.body;
+
+        // 필수 데이터 검증
+        if (!sessionId || !step || !page || !source) {
+            return res.status(400).json({ success: false, message: '필수 데이터가 누락되었습니다.' });
+        }
+
+        const pathData = {
+            sessionId, // 사용자를 식별하는 세션 ID
+            step,      // 방문 순서 (1, 2, 3...)
+            page,      // 현재 페이지 (분류된 이름, 예: 'cart', 'detail')
+            source,    // 유입 경로 (예: 'google', 'instagram', 'internal')
+            createdAt: new Date() // KST 기준 시간
+        };
+
+        // 새 'paths' 컬렉션에 데이터 삽입
+        const collection = db.collection('paths');
+        await collection.insertOne(pathData);
+
+        res.json({ success: true, message: 'Path tracked.' });
+
+    } catch (error) {
+        console.error('경로 추적 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류: 경로 추적 실패' });
+    }
+});
+
+
+
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
