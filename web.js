@@ -925,36 +925,71 @@ app.get('/api/analytics/trigger-daily-fetch', async (req, res) => {
     }
 });
 
+// --- (기존 /api/track-path 라우트 뒤에 추가) ---
 
-app.post('/api/track-path', async (req, res) => {
+/**
+ * ⭐️ [신규] v7: 퍼널(Funnel) 분석 엔드포인트
+ * 'paths' 컬렉션의 데이터를 MongoDB aggregate로 분석하여
+ * 특정 유입 소스(source)에서 시작한 세션들이
+ * 어떤 페이지(main, list, detail...)에 몇 명이나 도달했는지 집계하여 반환합니다.
+ */
+app.get('/api/funnel-analysis', async (req, res) => {
     try {
-        const { sessionId, step, page, source } = req.body;
+        const { source, startDate, endDate } = req.body;
 
-        // 필수 데이터 검증
-        if (!sessionId || !step || !page || !source) {
-            return res.status(400).json({ success: false, message: '필수 데이터가 누락되었습니다.' });
+        if (!source || !startDate || !endDate) {
+            return res.status(400).json({ success: false, message: 'source, startDate, endDate가 필요합니다.' });
         }
 
-        const pathData = {
-            sessionId, // 사용자를 식별하는 세션 ID
-            step,      // 방문 순서 (1, 2, 3...)
-            page,      // 현재 페이지 (분류된 이름, 예: 'cart', 'detail')
-            source,    // 유입 경로 (예: 'google', 'instagram', 'internal')
-            createdAt: new Date() // KST 기준 시간
-        };
+        const pathsCollection = db.collection('paths');
 
-        // 새 'paths' 컬렉션에 데이터 삽입
-        const collection = db.collection('paths');
-        await collection.insertOne(pathData);
+        // 1. KST 기준으로 날짜 범위 설정
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        
+        // 2. [1단계] 설정된 기간과 유입 소스(source)로 시작(step: 1)한 세션(sessionId)들을 찾습니다.
+        const initialSessions = await pathsCollection.find({
+            source: source,
+            step: 1,
+            createdAt: { $gte: start, $lte: end }
+        }).project({ sessionId: 1, _id: 0 }).toArray();
 
-        res.json({ success: true, message: 'Path tracked.' });
+        const sessionIds = initialSessions.map(s => s.sessionId);
+
+        if (sessionIds.length === 0) {
+            return res.json({ success: true, data: [], message: '해당 소스로 시작된 세션이 없습니다.' });
+        }
+
+        // 3. [2단계] 찾은 세션 ID들이 방문한 모든 페이지 경로(step > 1)를 가져옵니다.
+        const allPaths = await pathsCollection.find({
+            sessionId: { $in: sessionIds }
+        }).toArray();
+
+        // 4. [3단계] 각 페이지(main, list...)에 "몇 명"의 "고유한" 사용자가 도달했는지 집계합니다.
+        const pageReach = {}; // { main: new Set(), list: new Set(), ... }
+
+        allPaths.forEach(path => {
+            if (!pageReach[path.page]) {
+                pageReach[path.page] = new Set();
+            }
+            pageReach[path.page].add(path.sessionId);
+        });
+
+        // 5. [4단계] Set을 최종 카운트로 변환하여 반환
+        const resultData = Object.keys(pageReach).map(page => ({
+            page: page,
+            count: pageReach[page].size // Set의 크기 = 고유 방문자 수
+        }));
+
+        res.json({ success: true, data: resultData });
 
     } catch (error) {
-        console.error('경로 추적 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류: 경로 추적 실패' });
+        console.error('퍼널 분석 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류: 퍼널 분석 실패' });
     }
 });
-
 
 
 
