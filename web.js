@@ -10,7 +10,7 @@ const ftp = require('ftp');
 const crypto = require('crypto');
 require('dotenv').config();
 const ExcelJS = require('exceljs');
-const fs = require('fs');
+const fs =fs;
 const path = require('path');
 
 // --- 2. Express 앱 및 포트 설정 ---
@@ -30,6 +30,7 @@ const dbName = process.env.DB_NAME;
 const collectionName = process.env.COLLECTION_NAME; // 랭킹 상품 데이터
 const tokenCollectionName = 'tokens';
 const rankingCollectionName = 'rankings';
+const analyticsCollectionName = 'anaylist'; // 👈 [추가] 애널리틱스 데이터 컬렉션
 const MALLID = 'yogibo';
 const CATEGORY_NO = process.env.CATEGORY_NO || 858;
 
@@ -160,7 +161,7 @@ async function refreshAccessToken() {
     }
 }
 
-// API 요청 함수 (토큰 만료 시 자동 갱신)
+// [Admin API] 요청 함수 (토큰 만료 시 자동 갱신)
 async function apiRequest(method, url, data = {}, params = {}) {
     try {
         const response = await axios({
@@ -283,6 +284,107 @@ async function compareRankings(newRankings) {
     } catch (error) {
         console.error('compareRankings 오류:', error);
         throw error;
+    }
+}
+
+// 👈 --- [신규] Cafe24 애널리틱스 관련 함수 ---
+
+const DATA_API_BASE_URL = 'https://ca-api.cafe24data.com';
+
+/**
+ * [Data API] 요청 함수 (토큰 만료 시 자동 갱신)
+ * @param {string} method - 'GET', 'POST' 등
+ * @param {string} endpoint - '/pages/view', '/visitpaths/urls' 등
+ * @param {object} params - URL 쿼리 파라미터
+ * @returns {Promise<object>} API 응답 데이터
+ */
+async function dataApiRequest(method, endpoint, params = {}) {
+    const url = `${DATA_API_BASE_URL}${endpoint}`;
+    try {
+        // Data API는 mall_id를 쿼리 파라미터로 요구합니다.
+        params.mall_id = MALLID;
+
+        const response = await axios({
+            method,
+            url,
+            params, // GET 요청의 쿼리 파라미터
+            headers: {
+                'Authorization': `Bearer ${accessToken}`, // Admin API와 동일한 토큰 사용 가정
+                'Content-Type': 'application/json',
+            },
+        });
+        return response.data;
+    } catch (error) {
+        if (error.response?.status === 401) {
+            console.log('Data API Access Token 만료. 갱신 중...');
+            await refreshAccessToken(); // Admin API 토큰 갱신 로직 재사용
+            
+            // params 객체에서 mall_id가 중복 추가되지 않도록 원본을 다시 전달
+            const originalParams = { ...params };
+            delete originalParams.mall_id; // 재시도 시 mall_id는 다시 추가됨
+            
+            return dataApiRequest(method, endpoint, originalParams); // 재시도
+        } else {
+            console.error('Data API 요청 오류:', error.response ? error.response.data : error.message);
+            throw error;
+        }
+    }
+}
+
+/**
+ * (스케줄용) 어제자 Cafe24 애널리틱스 데이터를 수집하여 DB에 저장
+ */
+async function fetchAndStoreDailyAnalytics() {
+    // KST (Asia/Seoul) 기준 어제 날짜
+    const yesterday = moment().tz('Asia/Seoul').subtract(1, 'day').format('YYYY-MM-DD');
+    console.log(`[Analytics] ${yesterday} 데이터 수집 시작...`);
+
+    try {
+        const collection = db.collection(analyticsCollectionName);
+
+        // 1. 기간별 페이지 뷰 (visit_count, first_visit_count, device_type 등)
+        const pageViewData = await dataApiRequest('GET', '/pages/view', {
+            start_date: yesterday,
+            end_date: yesterday,
+            // Cafe24 Data API 문서에 따라, 디바이스 타입 등 세부 항목이 필요하면
+            // dimensions 파라미터 등을 추가해야 할 수 있습니다.
+            // 예: dimensions: 'device_type'
+        });
+
+        // MongoDB에 저장 (날짜와 타입 기준으로 덮어쓰기)
+        await collection.updateOne(
+            { date: yesterday, type: 'cafe24_page_views' },
+            { 
+                $set: { 
+                    data: pageViewData, // API 응답 전체 저장
+                    updatedAt: new Date() 
+                } 
+            },
+            { upsert: true }
+        );
+        console.log(`[Analytics] ${yesterday} 페이지 뷰 데이터 저장 완료.`);
+        
+        // 2. 접속 전 웹사이트 URL 분석 (유입 경로)
+        const visitPathData = await dataApiRequest('GET', '/visitpaths/urls', {
+            start_date: yesterday,
+            end_date: yesterday,
+        });
+
+        // MongoDB에 저장
+        await collection.updateOne(
+            { date: yesterday, type: 'cafe24_visit_paths' },
+            { 
+                $set: { 
+                    data: visitPathData, // API 응답 전체 저장
+                    updatedAt: new Date() 
+                } 
+            },
+            { upsert: true }
+        );
+        console.log(`[Analytics] ${yesterday} 방문 경로 데이터 저장 완료.`);
+
+    } catch (error) {
+        console.error(`[Analytics] ${yesterday} 일일 데이터 수집 실패:`, error.message);
     }
 }
 
@@ -768,6 +870,82 @@ app.get('/download-excel', async (req, res) => {
     }
 });
 
+
+// 👈 --- [신규] 애널리틱스 라우트 ---
+
+/**
+ * [Feature 1] UTM/태그 클릭 트래킹
+ * 클라이언트에서 { "tagId": "my_utm_tag_123" } 형식으로 POST 요청
+ */
+app.post('/api/track-click', async (req, res) => {
+    const { tagId } = req.body;
+    if (!tagId || typeof tagId !== 'string') {
+        return res.status(400).json({ success: false, message: 'tagId가 필요합니다 (string).' });
+    }
+
+    // KST 기준 오늘 날짜
+    const yyyyMmDd = moment().tz('Asia/Seoul').format('YYYY-MM-DD');
+    
+    try {
+        const collection = db.collection(analyticsCollectionName);
+        
+        // 오늘 날짜의 utm_clicks 문서에서 해당 tagId의 카운트를 1 증가 (없으면 생성)
+        await collection.updateOne(
+            { date: yyyyMmDd, type: 'utm_clicks' },
+            { 
+                $inc: { [`clicks.${tagId}`]: 1 }, // $inc로 카운트 증가
+                $set: { updatedAt: new Date() }
+            },
+            { upsert: true } // 문서가 없으면 새로 생성
+        );
+        
+        res.json({ success: true, message: `Tag [${tagId}] click tracked.` });
+    } catch (error) {
+        console.error('UTM 클릭 트래킹 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류: 트래킹 실패' });
+    }
+});
+
+/**
+ * 애널리틱스 데이터 조회
+ * 예: /api/analytics?date=2025-11-13&type=utm_clicks
+ * 예: /api/analytics?date=2025-11-13&type=cafe24_page_views
+ */
+app.get('/api/analytics', async (req, res) => {
+    const { date, type } = req.query;
+
+    if (!date || !type) {
+        return res.status(400).json({ success: false, message: 'date와 type 쿼리 파라미터가 필요합니다.' });
+    }
+    
+    try {
+        const data = await db.collection(analyticsCollectionName).findOne({ date, type });
+        
+        if (data) {
+            res.json({ success: true, data });
+        } else {
+            res.status(404).json({ success: false, message: '해당 조건의 데이터를 찾을 수 없습니다.' });
+        }
+    } catch (error) {
+        console.error('Analytics 데이터 조회 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류: 조회 실패' });
+    }
+});
+
+/**
+ * (테스트용) 수동으로 어제자 Cafe24 데이터 수집 트리거
+ */
+app.get('/api/analytics/trigger-daily-fetch', async (req, res) => {
+    try {
+        // 비동기로 실행 (요청에 즉시 응답)
+        fetchAndStoreDailyAnalytics();
+        res.json({ success: true, message: '어제자 데이터 수집 작업을 시작했습니다. (완료는 로그 확인)' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '수집 작업 실행 실패', error: error.message });
+    }
+});
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
@@ -792,8 +970,24 @@ mongoClient.connect()
                 }
             });
 
+            // 👈 [추가] 스케줄: 매일 새벽 2시 0분에 어제자 Cafe24 Analytics 데이터 수집
+            // (Cafe24 데이터가 보통 새벽 1~2시쯤 집계 완료되는 것을 가정)
+            schedule.scheduleJob('0 2 * * *', async () => {
+                console.log('[스케줄] 일일 애널리틱스 데이터 수집 시작');
+                try {
+                    await fetchAndStoreDailyAnalytics();
+                    console.log('[스케줄] 일일 애널리틱스 데이터 수집 완료');
+                } catch (error) {
+                    console.error('[스케줄] 일일 애널리틱스 수집 중 오류 발생:', error.message);
+                }
+            });
+
             // 서버 시작 시 랭킹 데이터 1회 초기화
             await initializeServer();
+
+            // (선택사항) 서버 시작 시 어제자 데이터 즉시 1회 수집 (테스트용)
+            // console.log('서버 시작: 1회성 애널리틱스 데이터 수집 시도...');
+            // await fetchAndStoreDailyAnalytics();
         });
     })
     .catch(err => {
