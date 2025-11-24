@@ -794,7 +794,7 @@ app.post('/api/track/log', async (req, res) => {
         const refLower = referrer ? referrer.toLowerCase() : '';
 
         if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')|| refLower.includes('yogibo.cafe24.com')) {
-            source = '다이렉트방뭄ㄴ'; 
+            source = '다이렉트방문'; 
         } 
         else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
