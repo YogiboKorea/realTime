@@ -771,88 +771,61 @@ app.get('/download-excel', async (req, res) => {
 
 
 //여기 추가하가ㅣ
-
-
 // ==========================================
-// [추가 기능] 유입 경로 및 퍼널 분석 로직
+// [FINAL] server.js - 봇 차단 및 퍼널 분석
 // ==========================================
-// [수정된 서버 코드] 한글 적용 및 기타 도메인 세분화
 
 // 1. 로그 수집 API
-// [수정된 API] 봇 차단 및 유입 경로 분석 로직
-
 app.post('/api/track/log', async (req, res) => {
     try {
         const { currentUrl, referrer, sessionId } = req.body;
 
-        // 🚫 1. 봇/크롤러/스캐너 차단 로직 (여기서 걸러냅니다)
-        // themediatrust: 광고/보안 스캐너
-        // gtmetrix: 사이트 속도 측정 도구
-        // bot: 구글봇 등 검색엔진 수집기
+        // 🚫 봇 필터링 (저장 안 함)
         if (referrer && (
-            referrer.includes('themediatrust.com') || 
-            referrer.includes('gtmetrix') ||
+            referrer.includes('themediatrust') || 
+            referrer.includes('gtmetrix') || 
             referrer.includes('bot') || 
-            referrer.includes('crawl')
-        )) {
-            console.log(`🤖 봇 유입 무시됨: ${referrer}`);
-            return res.json({ success: true, message: 'Filtered Bot' }); // 저장 안 하고 종료
+            referrer.includes('crawl'))) {
+            return res.json({ success: true, message: 'Bot Filtered' });
         }
 
-        // 2. 유입 경로 분석 (봇이 아닐 경우만 실행)
-        let source = '기타'; 
+        // 유입 경로 분석 (한글화)
+        let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        if (!referrer || referrer.trim() === '') {
-            source = '직접 방문'; 
-        } else {
-            if (refLower.includes('naver.com')) source = '네이버';
-            else if (refLower.includes('google')) source = '구글';
-            else if (refLower.includes('facebook.com')) source = '페이스북';
-            else if (refLower.includes('instagram.com')) source = '인스타그램';
-            else if (refLower.includes('daum.net')) source = '다음';
-            else if (refLower.includes('kakao.com')) source = '카카오';
-            else if (refLower.includes('youtube.com')) source = '유튜브';
-            else {
-                // 그 외 사이트는 도메인만 추출
-                try {
-                    const urlObj = new URL(referrer);
-                    source = urlObj.hostname.replace('www.', '');
-                } catch (e) {
-                    source = '기타(분석불가)';
-                }
-            }
+        if (!referrer || referrer.trim() === '') source = '직접 방문';
+        else if (refLower.includes('naver.com')) source = '네이버';
+        else if (refLower.includes('google')) source = '구글';
+        else if (refLower.includes('facebook.com')) source = '페이스북';
+        else if (refLower.includes('instagram.com')) source = '인스타그램';
+        else if (refLower.includes('kakao.com')) source = '카카오';
+        else if (refLower.includes('daum.net')) source = '다음';
+        else if (refLower.includes('youtube.com')) source = '유튜브';
+        else {
+            try { source = new URL(referrer).hostname.replace('www.', ''); } 
+            catch (e) { source = '기타'; }
         }
 
-        // 3. 퍼널 단계 판단
+        // 퍼널 단계 판단
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
-
         if (urlLower.includes('/order/result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
-        // 4. 진짜 고객 데이터만 저장
-        const logData = {
-            sessionId,
-            source,
-            originalReferrer: referrer,
-            currentUrl,
-            step,
-            createdAt: new Date()
-        };
-
-        await db.collection('access_logs').insertOne(logData);
+        await db.collection('access_logs').insertOne({
+            sessionId, source, step, currentUrl, createdAt: new Date()
+        });
         res.status(200).json({ success: true });
 
     } catch (error) {
-        console.error('로그 저장 오류:', error);
+        console.error(error);
         res.status(500).json({ success: false });
     }
 });
 
-// 2. 통계 조회 API (동적 데이터 구조 지원)
+// 2. 통계 조회 API
 app.get('/api/track/stats', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
@@ -861,49 +834,22 @@ app.get('/api/track/stats', async (req, res) => {
 
         const stats = await db.collection('access_logs').aggregate([
             { $match: { createdAt: { $gte: start, $lte: end } } },
-            {
-                $group: {
-                    _id: { source: "$source", step: "$step" },
-                    uniqueUsers: { $addToSet: "$sessionId" }
-                }
-            },
-            {
-                $project: {
-                    source: "$_id.source",
-                    step: "$_id.step",
-                    count: { $size: "$uniqueUsers" }
-                }
-            },
-            { $sort: { count: -1 } } // 방문 많은 순서로 정렬
+            { $group: { _id: { source: "$source", step: "$step" }, uniqueUsers: { $addToSet: "$sessionId" } } },
+            { $project: { source: "$_id.source", step: "$_id.step", count: { $size: "$uniqueUsers" } } }
         ]).toArray();
 
-        // 데이터 포맷팅 (동적 키 생성)
+        // 프론트엔드에서 계산하기 쉽게 데이터 구조화
         const formattedData = {};
-
-        // 1. 집계된 데이터 매핑
         stats.forEach(item => {
-            if (!formattedData[item.source]) {
-                // 초기화 (모든 단계 0으로)
-                formattedData[item.source] = { 
-                    VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 
-                };
-            }
+            if (!formattedData[item.source]) formattedData[item.source] = {};
             formattedData[item.source][item.step] = item.count;
         });
 
-        // 2. 데이터가 하나도 없을 때를 대비해 기본 필드 생성 (선택사항)
-        if (Object.keys(formattedData).length === 0) {
-            formattedData['데이터 없음'] = { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 };
-        }
-
         res.json({ success: true, data: formattedData });
-
     } catch (error) {
-        console.error('통계 오류:', error);
         res.status(500).json({ success: false });
     }
 });
-
 // 2. 경로 이탈 및 전환율 분석 데이터 조회 API
 app.get('/api/track/stats', async (req, res) => {
     try {
