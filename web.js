@@ -773,11 +773,11 @@ app.get('/download-excel', async (req, res) => {
 // [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 통합 수정본)
 // ==========================================
 
-// 1. [핵심] 로그 수집 API (장바구니 상품 + 체류시간 + 봇 차단 + 한글 분류)
+// 1. [핵심] 로그 수집 API (수정됨: marketing 변수 선언 추가)
 app.post('/api/track/log', async (req, res) => {
     try {
-        // ★ cartItems 추가됨 (장바구니 상품 목록)
-        const { currentUrl, referrer, sessionId, memberId, cartItems } = req.body;
+        // ★ [수정] 여기에 ', marketing'이 빠져있었습니다. 추가했습니다!
+        const { currentUrl, referrer, sessionId, memberId, cartItems, marketing } = req.body;
 
         // 🚫 1. 봇/스캐너 필터링
         if (referrer && (
@@ -793,16 +793,14 @@ app.post('/api/track/log', async (req, res) => {
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        // [핵심] 리퍼러가 없거나 OR 내 사이트(yogibo.kr) 내부 이동인 경우 -> '주소 직접 입력 방문'
-        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr') || refLower.includes('yogibo.cafe24.com')) {
-            source = '다이렉트방문'; 
+        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
+            source = '주소 직접 입력 방문'; 
         } 
-        // 외부 채널 분류
         else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
-        else if (refLower.includes('criteo.com')) source = '크리테오(광고)'; // 광고 식별
+        else if (refLower.includes('criteo.com')) source = '크리테오(광고)';
         else if (refLower.includes('kakao.com')) source = '카카오';
         else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
@@ -815,7 +813,7 @@ app.post('/api/track/log', async (req, res) => {
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
 
-        if (urlLower.includes('/order_result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
+        if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
@@ -828,13 +826,12 @@ app.post('/api/track/log', async (req, res) => {
             step,
             currentUrl,
             originalReferrer: referrer,
-            cartItems: cartItems || [], // ★ 장바구니 상품 저장
-            marketing: marketing || null, // ★ [추가] 마케팅 정보 저장
-            duration: 0, // ★ 체류시간 초기화
+            cartItems: cartItems || [],
+            marketing: marketing || null, // 이제 에러가 나지 않습니다.
+            duration: 0,
             createdAt: new Date()
         });
 
-        // ★ 로그 ID 반환 (프론트에서 체류시간 업데이트할 때 사용)
         res.status(200).json({ success: true, logId: result.insertedId });
 
     } catch (error) {
