@@ -770,15 +770,16 @@ app.get('/download-excel', async (req, res) => {
 
 
 // ==========================================
-// [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 수정본)
+// [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 통합 수정본)
 // ==========================================
 
-// 1. [핵심] 로그 수집 API (체류시간용 ID 반환 + 봇 차단 + 한글 분류)
+// 1. [핵심] 로그 수집 API (장바구니 상품 + 체류시간 + 봇 차단 + 한글 분류)
 app.post('/api/track/log', async (req, res) => {
     try {
-        const { currentUrl, referrer, sessionId, memberId } = req.body;
+        // ★ cartItems 추가됨 (장바구니 상품 목록)
+        const { currentUrl, referrer, sessionId, memberId, cartItems } = req.body;
 
-        // 🚫 1. 봇/스캐너 필터링 (데이터 오염 방지)
+        // 🚫 1. 봇/스캐너 필터링
         if (referrer && (
             referrer.includes('themediatrust') || 
             referrer.includes('gtmetrix') || 
@@ -792,8 +793,7 @@ app.post('/api/track/log', async (req, res) => {
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        // [핵심 변경] 리퍼러가 없거나(찐 직접방문) OR 내 사이트 주소(yogibo.kr)가 포함된 경우
-        // -> '주소 직접 입력 방문'으로 통합
+        // [핵심] 리퍼러가 없거나 OR 내 사이트(yogibo.kr) 내부 이동인 경우 -> '주소 직접 입력 방문'
         if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
             source = '주소 직접 입력 방문'; 
         } 
@@ -802,7 +802,7 @@ app.post('/api/track/log', async (req, res) => {
         else if (refLower.includes('google')) source = '구글';
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
-        else if (refLower.includes('criteo.com')) source = '크리테오(광고)';
+        else if (refLower.includes('criteo.com')) source = '크리테오(광고)'; // 광고 식별
         else if (refLower.includes('kakao.com')) source = '카카오';
         else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
@@ -812,7 +812,7 @@ app.post('/api/track/log', async (req, res) => {
         }
 
         // 📊 3. 퍼널 단계 판단
-        let step = 'VISIT'; // 기본값 (프론트와 통일)
+        let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
 
         if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
@@ -820,7 +820,7 @@ app.post('/api/track/log', async (req, res) => {
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
-        // 💾 4. DB 저장 (duration 초기값 0 추가)
+        // 💾 4. DB 저장
         const result = await db.collection('access_logs').insertOne({
             sessionId,
             memberId: memberId || 'GUEST',
@@ -828,11 +828,12 @@ app.post('/api/track/log', async (req, res) => {
             step,
             currentUrl,
             originalReferrer: referrer,
-            duration: 0, // [추가] 체류시간 초기화
+            cartItems: cartItems || [], // ★ 장바구니 상품 저장
+            duration: 0, // ★ 체류시간 초기화
             createdAt: new Date()
         });
 
-        // ★ [중요] 생성된 로그 ID를 프론트로 반환 (나갈 때 시간 업데이트용)
+        // ★ 로그 ID 반환 (프론트에서 체류시간 업데이트할 때 사용)
         res.status(200).json({ success: true, logId: result.insertedId });
 
     } catch (error) {
@@ -854,13 +855,12 @@ app.post('/api/track/time', async (req, res) => {
         );
         res.status(200).json({ success: true });
     } catch (error) {
-        // 이탈 시점 에러는 로그만 남기고 무시
         console.error('Time Update Error:', error);
         res.status(200).send();
     }
 });
 
-// 3. 통계 조회 API (대시보드 차트용 집계)
+// 3. 통계 조회 API (대시보드 차트용)
 app.get('/api/track/stats', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
@@ -904,7 +904,6 @@ app.get('/api/track/visitors', async (req, res) => {
         const start = new Date(targetDate); start.setHours(0,0,0,0);
         const end = new Date(targetDate); end.setHours(23,59,59,999);
 
-        // 최신순 정렬 -> 세션별 그룹화 -> 가장 최근 활동 시간 기준 정렬
         const visitors = await db.collection('access_logs').aggregate([
             { $match: { createdAt: { $gte: start, $lte: end } } },
             { $sort: { createdAt: -1 } },
@@ -933,7 +932,7 @@ app.get('/api/track/journey', async (req, res) => {
         
         const journey = await db.collection('access_logs')
             .find({ sessionId: sessionId })
-            .sort({ createdAt: 1 }) // 시간 순서대로 (과거 -> 현재)
+            .sort({ createdAt: 1 })
             .toArray();
 
         res.json({ success: true, journey });
