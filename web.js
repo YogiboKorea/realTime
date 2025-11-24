@@ -794,7 +794,7 @@ app.post('/api/track/log', async (req, res) => {
         const refLower = referrer ? referrer.toLowerCase() : '';
 
         // [핵심] 리퍼러가 없거나 OR 내 사이트(yogibo.kr) 내부 이동인 경우 -> '주소 직접 입력 방문'
-        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
+        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr') || refLower.includes('yogibo.cafe24.com')) {
             source = '다이렉트방문'; 
         } 
         // 외부 채널 분류
