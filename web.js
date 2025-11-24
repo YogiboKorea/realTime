@@ -779,36 +779,52 @@ app.get('/download-excel', async (req, res) => {
 // [수정된 서버 코드] 한글 적용 및 기타 도메인 세분화
 
 // 1. 로그 수집 API
+// [수정된 API] 봇 차단 및 유입 경로 분석 로직
+
 app.post('/api/track/log', async (req, res) => {
     try {
         const { currentUrl, referrer, sessionId } = req.body;
 
+        // 🚫 1. 봇/크롤러/스캐너 차단 로직 (여기서 걸러냅니다)
+        // themediatrust: 광고/보안 스캐너
+        // gtmetrix: 사이트 속도 측정 도구
+        // bot: 구글봇 등 검색엔진 수집기
+        if (referrer && (
+            referrer.includes('themediatrust.com') || 
+            referrer.includes('gtmetrix') ||
+            referrer.includes('bot') || 
+            referrer.includes('crawl')
+        )) {
+            console.log(`🤖 봇 유입 무시됨: ${referrer}`);
+            return res.json({ success: true, message: 'Filtered Bot' }); // 저장 안 하고 종료
+        }
+
+        // 2. 유입 경로 분석 (봇이 아닐 경우만 실행)
         let source = '기타'; 
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        // --- 유입 경로 정밀 분석 로직 ---
         if (!referrer || referrer.trim() === '') {
-            source = '직접 방문'; // 주소창 입력 또는 즐겨찾기
+            source = '직접 방문'; 
         } else {
-            // 주요 채널 한글 변환
             if (refLower.includes('naver.com')) source = '네이버';
             else if (refLower.includes('google')) source = '구글';
             else if (refLower.includes('facebook.com')) source = '페이스북';
             else if (refLower.includes('instagram.com')) source = '인스타그램';
             else if (refLower.includes('daum.net')) source = '다음';
             else if (refLower.includes('kakao.com')) source = '카카오';
+            else if (refLower.includes('youtube.com')) source = '유튜브';
             else {
-                // 그 외 사이트는 도메인만 추출해서 저장 (예: https://aaa.com/bbs... -> aaa.com)
+                // 그 외 사이트는 도메인만 추출
                 try {
                     const urlObj = new URL(referrer);
-                    source = urlObj.hostname.replace('www.', ''); // www. 제거하고 도메인만
+                    source = urlObj.hostname.replace('www.', '');
                 } catch (e) {
                     source = '기타(분석불가)';
                 }
             }
         }
 
-        // 퍼널 단계 판단
+        // 3. 퍼널 단계 판단
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
 
@@ -817,9 +833,10 @@ app.post('/api/track/log', async (req, res) => {
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
+        // 4. 진짜 고객 데이터만 저장
         const logData = {
             sessionId,
-            source, // 한글 또는 도메인 저장
+            source,
             originalReferrer: referrer,
             currentUrl,
             step,
@@ -948,7 +965,17 @@ app.get('/api/track/stats', async (req, res) => {
 
 
 
-
+// 봇 데이터 삭제용 임시 API
+app.get('/api/clean-bots', async (req, res) => {
+    try {
+        const result = await db.collection('access_logs').deleteMany({
+            originalReferrer: { $regex: 'themediatrust.com' }
+        });
+        res.send(`${result.deletedCount}개의 봇 데이터를 삭제했습니다.`);
+    } catch (e) {
+        res.send('삭제 실패: ' + e.message);
+    }
+});
 
 
 
