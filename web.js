@@ -793,8 +793,8 @@ app.post('/api/track/log', async (req, res) => {
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
-            source = '주소 직접 입력 방문'; 
+        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')|| refLower.includes('yogibo.cafe24.com')) {
+            source = '다이렉트방뭄ㄴ'; 
         } 
         else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
