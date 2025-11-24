@@ -774,12 +774,13 @@ app.get('/download-excel', async (req, res) => {
 // [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 통합본)
 // ==========================================
 
-// 1. 로그 수집 API (봇 차단 + 한글 분류 + 회원ID 저장)
+// [수정된 부분] app.post('/api/track/log') 내부 로직
+
 app.post('/api/track/log', async (req, res) => {
     try {
         const { currentUrl, referrer, sessionId, memberId } = req.body;
 
-        // 🚫 1. 봇/스캐너 필터링 (데이터 오염 방지)
+        // 1. 봇 필터링 (기존 동일)
         if (referrer && (
             referrer.includes('themediatrust') || 
             referrer.includes('gtmetrix') || 
@@ -789,14 +790,18 @@ app.post('/api/track/log', async (req, res) => {
             return res.json({ success: true, message: 'Filtered Bot' });
         }
 
-        // 🔍 2. 유입 출처 한글화
+        // 🔍 2. 유입 출처 분석 (여기가 수정되었습니다)
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        if (!referrer || referrer.trim() === '') {
-            source = '직접 방문';
-        } else if (refLower.includes('naver.com')) source = '네이버';
+        // [핵심 변경] 리퍼러가 없거나(찐 직접방문) OR 내 사이트 주소(yogibo.kr)가 포함된 경우
+        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
+            source = '주소 직접 입력 방문'; 
+        } 
+        // 외부 채널 분류
+        else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
+        else if (refLower.includes('criteo.com')) source = '크리테오(광고)'; // 아까 추가한 크리테오
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
         else if (refLower.includes('kakao.com')) source = '카카오';
@@ -807,19 +812,18 @@ app.post('/api/track/log', async (req, res) => {
             catch (e) { source = '기타'; }
         }
 
-        // 📊 3. 퍼널 단계 판단
+        // 3. 퍼널 단계 판단 (기존 동일)
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
-
         if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
-        // 💾 4. DB 저장 (memberId 추가됨)
+        // 4. DB 저장
         await db.collection('access_logs').insertOne({
             sessionId,
-            memberId: memberId || 'GUEST', // 회원이면 ID, 아니면 GUEST
+            memberId: memberId || 'GUEST',
             source,
             step,
             currentUrl,
@@ -834,7 +838,6 @@ app.post('/api/track/log', async (req, res) => {
         res.status(500).json({ success: false });
     }
 });
-
 // 2. 통계 조회 API (대시보드 차트용 집계)
 app.get('/api/track/stats', async (req, res) => {
     try {
