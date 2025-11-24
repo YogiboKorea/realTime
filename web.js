@@ -796,7 +796,7 @@ app.post('/api/track/log', async (req, res) => {
 
         // [핵심 변경] 리퍼러가 없거나(찐 직접방문) OR 내 사이트 주소(yogibo.kr)가 포함된 경우
         if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
-            source = '주소 직접 입력 방문'; 
+            source = '다이렉트'; 
         } 
         // 외부 채널 분류
         else if (refLower.includes('naver.com')) source = '네이버';
@@ -813,7 +813,7 @@ app.post('/api/track/log', async (req, res) => {
         }
 
         // 3. 퍼널 단계 판단 (기존 동일)
-        let step = 'VISIT';
+        let step = '방문';
         const urlLower = currentUrl.toLowerCase();
         if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
