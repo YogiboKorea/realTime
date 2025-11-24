@@ -769,18 +769,16 @@ app.get('/download-excel', async (req, res) => {
 });
 
 
-
 // ==========================================
-// [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 통합본)
+// [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 수정본)
 // ==========================================
 
-// [수정된 부분] app.post('/api/track/log') 내부 로직
-
+// 1. [핵심] 로그 수집 API (체류시간용 ID 반환 + 봇 차단 + 한글 분류)
 app.post('/api/track/log', async (req, res) => {
     try {
         const { currentUrl, referrer, sessionId, memberId } = req.body;
 
-        // 1. 봇 필터링 (기존 동일)
+        // 🚫 1. 봇/스캐너 필터링 (데이터 오염 방지)
         if (referrer && (
             referrer.includes('themediatrust') || 
             referrer.includes('gtmetrix') || 
@@ -790,20 +788,21 @@ app.post('/api/track/log', async (req, res) => {
             return res.json({ success: true, message: 'Filtered Bot' });
         }
 
-        // 🔍 2. 유입 출처 분석 (여기가 수정되었습니다)
+        // 🔍 2. 유입 출처 한글화 및 도메인 정제
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
         // [핵심 변경] 리퍼러가 없거나(찐 직접방문) OR 내 사이트 주소(yogibo.kr)가 포함된 경우
+        // -> '주소 직접 입력 방문'으로 통합
         if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
-            source = '다이렉트'; 
+            source = '주소 직접 입력 방문'; 
         } 
         // 외부 채널 분류
         else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
-        else if (refLower.includes('criteo.com')) source = '크리테오(광고)'; // 아까 추가한 크리테오
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
+        else if (refLower.includes('criteo.com')) source = '크리테오(광고)';
         else if (refLower.includes('kakao.com')) source = '카카오';
         else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
@@ -812,33 +811,56 @@ app.post('/api/track/log', async (req, res) => {
             catch (e) { source = '기타'; }
         }
 
-        // 3. 퍼널 단계 판단 (기존 동일)
-        let step = '방문';
+        // 📊 3. 퍼널 단계 판단
+        let step = 'VISIT'; // 기본값 (프론트와 통일)
         const urlLower = currentUrl.toLowerCase();
+
         if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
-        // 4. DB 저장
-        await db.collection('access_logs').insertOne({
+        // 💾 4. DB 저장 (duration 초기값 0 추가)
+        const result = await db.collection('access_logs').insertOne({
             sessionId,
             memberId: memberId || 'GUEST',
             source,
             step,
             currentUrl,
             originalReferrer: referrer,
+            duration: 0, // [추가] 체류시간 초기화
             createdAt: new Date()
         });
 
-        res.status(200).json({ success: true });
+        // ★ [중요] 생성된 로그 ID를 프론트로 반환 (나갈 때 시간 업데이트용)
+        res.status(200).json({ success: true, logId: result.insertedId });
 
     } catch (error) {
         console.error('Log Error:', error);
         res.status(500).json({ success: false });
     }
 });
-// 2. 통계 조회 API (대시보드 차트용 집계)
+
+// 2. [신규] 체류 시간 업데이트 API (페이지 이탈 시 호출됨)
+app.post('/api/track/time', async (req, res) => {
+    try {
+        const { logId, duration } = req.body;
+        if (!logId) return res.json({ success: false });
+
+        // 해당 로그를 찾아 체류시간(초) 업데이트
+        await db.collection('access_logs').updateOne(
+            { _id: new ObjectId(logId) },
+            { $set: { duration: parseInt(duration) } }
+        );
+        res.status(200).json({ success: true });
+    } catch (error) {
+        // 이탈 시점 에러는 로그만 남기고 무시
+        console.error('Time Update Error:', error);
+        res.status(200).send();
+    }
+});
+
+// 3. 통계 조회 API (대시보드 차트용 집계)
 app.get('/api/track/stats', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
@@ -874,7 +896,7 @@ app.get('/api/track/stats', async (req, res) => {
     }
 });
 
-// 3. [신규] 금일 방문자 목록 조회 API (팝업 리스트용)
+// 4. 금일 방문자 목록 조회 API (팝업 리스트용)
 app.get('/api/track/visitors', async (req, res) => {
     try {
         const { date } = req.query;
@@ -904,7 +926,7 @@ app.get('/api/track/visitors', async (req, res) => {
     }
 });
 
-// 4. [신규] 특정 고객 이동 경로 상세 조회 API (팝업 그래프용)
+// 5. 특정 고객 이동 경로 상세 조회 API (팝업 그래프용)
 app.get('/api/track/journey', async (req, res) => {
     try {
         const { sessionId } = req.query;
@@ -920,7 +942,7 @@ app.get('/api/track/journey', async (req, res) => {
     }
 });
 
-// 5. 봇 데이터 삭제용 임시 API
+// 6. 봇 데이터 삭제용 임시 API
 app.get('/api/clean-bots', async (req, res) => {
     try {
         const result = await db.collection('access_logs').deleteMany({
@@ -931,7 +953,6 @@ app.get('/api/clean-bots', async (req, res) => {
         res.send('삭제 실패: ' + e.message);
     }
 });
-
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
