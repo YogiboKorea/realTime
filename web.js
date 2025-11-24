@@ -769,72 +769,129 @@ app.get('/download-excel', async (req, res) => {
 });
 
 
-// [수정] web.js 파일의 기존 /api/funnel-analysis 코드를 이걸로 교체하세요.
 
-/**
- * ⭐️ [수정됨] v7: 퍼널(Funnel) 분석 엔드포인트
- * GET 요청의 req.query에서 파라미터를 읽도록 수정
- */
-app.get('/api/funnel-analysis', async (req, res) => {
+//여기 추가하가ㅣ
+
+
+// ==========================================
+// [추가 기능] 유입 경로 및 퍼널 분석 로직
+// ==========================================
+
+// 1. 고객 행동 로그 수집 API
+app.post('/api/track/log', async (req, res) => {
     try {
-        // ⬇️ [수정됨] req.body -> req.query ⬇️
-        const { source, startDate, endDate } = req.query;
+        const { currentUrl, referrer, sessionId } = req.body;
 
-        if (!source || !startDate || !endDate) {
-            return res.status(400).json({ success: false, message: 'source, startDate, endDate가 필요합니다.' });
-        }
-
-        const pathsCollection = db.collection('paths');
-
-        // 1. KST 기준으로 날짜 범위 설정
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
+        // 1-1. 유입 출처(Source) 판별
+        let source = 'others';
+        const refLower = referrer ? referrer.toLowerCase() : '';
         
-        // 2. [1단계] 설정된 기간과 유입 소스(source)로 시작(step: 1)한 세션(sessionId)들을 찾습니다.
-        const initialSessions = await pathsCollection.find({
-            source: source,
-            step: 1,
-            createdAt: { $gte: start, $lte: end }
-        }).project({ sessionId: 1, _id: 0 }).toArray();
+        if (refLower.includes('naver.com')) source = 'naver';
+        else if (refLower.includes('facebook.com')) source = 'facebook';
+        else if (refLower.includes('instagram.com')) source = 'instagram';
+        // 자사몰 내부 이동인 경우 기존 소스를 유지해야 하지만, 
+        // 여기서는 단순 로그 저장이므로 분석 단계에서 '첫 유입'을 기준으로 필터링합니다.
 
-        const sessionIds = initialSessions.map(s => s.sessionId);
+        // 1-2. 퍼널 단계(Step) 판별
+        let step = 'VISIT'; // 기본 방문
+        const urlLower = currentUrl.toLowerCase();
 
-        if (sessionIds.length === 0) {
-            // 데이터가 없는 것은 에러가 아니므로, 빈 배열을 반환
-            return res.json({ success: true, data: [], message: '해당 소스로 시작된 세션이 없습니다.' });
+        if (urlLower.includes('/order/result.html')) {
+            step = 'PURCHASE'; // 결제 완료
+        } else if (urlLower.includes('/order/orderform.html')) {
+            step = 'CHECKOUT'; // 결제 페이지(주문서 작성)
+        } else if (urlLower.includes('/order/basket.html')) {
+            step = 'CART'; // 장바구니
+        } else if (urlLower.includes('/product/')) {
+            step = 'VIEW_ITEM'; // 상품 상세
         }
 
-        // 3. [2단계] 찾은 세션 ID들이 방문한 모든 페이지 경로를 가져옵니다.
-        // (step: 1도 포함해야 첫 페이지 도달율을 알 수 있음)
-        const allPaths = await pathsCollection.find({
-            sessionId: { $in: sessionIds }
-        }).toArray();
+        // 1-3. 로그 데이터 구성
+        const logData = {
+            sessionId,      // 유저 식별자 (프론트에서 생성)
+            source,         // 유입 채널 (naver, facebook, instagram, others)
+            originalReferrer: referrer, // 원본 리퍼러 주소
+            currentUrl,     // 현재 주소
+            step,           // 분석된 단계
+            createdAt: new Date() // 접속 시간
+        };
 
-        // 4. [3단계] 각 페이지(main, list...)에 "몇 명"의 "고유한" 사용자가 도달했는지 집계합니다.
-        const pageReach = {}; // { main: new Set(), list: new Set(), ... }
+        // 1-4. DB 저장 (access_logs 컬렉션 사용)
+        await db.collection('access_logs').insertOne(logData);
 
-        allPaths.forEach(path => {
-            if (!pageReach[path.page]) {
-                pageReach[path.page] = new Set();
-            }
-            pageReach[path.page].add(path.sessionId);
-        });
-
-        // 5. [4단계] Set을 최종 카운트로 변환하여 반환
-        const resultData = Object.keys(pageReach).map(page => ({
-            page: page,
-            count: pageReach[page].size // Set의 크기 = 고유 방문자 수
-        }));
-
-        res.json({ success: true, data: resultData });
+        res.status(200).json({ success: true });
 
     } catch (error) {
-        console.error('퍼널 분석 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류: 퍼널 분석 실패' });
+        console.error('로그 저장 오류:', error);
+        res.status(500).json({ success: false, message: '로그 저장 실패' });
     }
 });
+
+// 2. 경로 이탈 및 전환율 분석 데이터 조회 API
+app.get('/api/track/stats', async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query; // 조회 기간 (예: 2024-01-01)
+
+        // 날짜 필터 설정 (기본값: 오늘)
+        const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0,0,0,0));
+        const end = endDate ? new Date(new Date(endDate).setHours(23,59,59,999)) : new Date();
+
+        // MongoDB Aggregation Pipeline
+        const stats = await db.collection('access_logs').aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: start, $lte: end } // 기간 필터
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        source: "$source", // 소스별 (naver, facebook 등)
+                        step: "$step"      // 단계별 (VIEW, CART 등)
+                    },
+                    uniqueUsers: { $addToSet: "$sessionId" } // 중복 세션 제거 (UV 기준)
+                }
+            },
+            {
+                $project: {
+                    source: "$_id.source",
+                    step: "$_id.step",
+                    count: { $size: "$uniqueUsers" } // 고유 방문자 수 계산
+                }
+            },
+            {
+                $sort: { source: 1, step: 1 } // 정렬
+            }
+        ]).toArray();
+
+        // 데이터 포맷팅 (프론트엔드에서 보기 편하게 가공)
+        const formattedData = {
+            naver: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 },
+            facebook: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 },
+            instagram: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 },
+            others: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 }
+        };
+
+        stats.forEach(item => {
+            if (formattedData[item.source] && formattedData[item.source][item.step] !== undefined) {
+                formattedData[item.source][item.step] = item.count;
+            }
+        });
+
+        res.json({ success: true, data: formattedData });
+
+    } catch (error) {
+        console.error('통계 조회 오류:', error);
+        res.status(500).json({ success: false, message: '통계 조회 실패' });
+    }
+});
+
+
+
+
+
+
+
 
 
 // --- 8. 서버 시작 ---
