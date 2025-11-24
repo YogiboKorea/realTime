@@ -770,31 +770,35 @@ app.get('/download-excel', async (req, res) => {
 
 
 
-//여기 추가하가ㅣ
 // ==========================================
 // [FINAL] server.js - 봇 차단 및 퍼널 분석
 // ==========================================
+// ==========================================
+// [FINAL] server.js - 최종 분석 로직
+// ==========================================
 
-// 1. 로그 수집 API
+// 1. 로그 수집 API (봇 차단 + 한글 분류)
 app.post('/api/track/log', async (req, res) => {
     try {
         const { currentUrl, referrer, sessionId } = req.body;
 
-        // 🚫 봇 필터링 (저장 안 함)
+        // 🚫 1. 봇/스캐너 필터링 (데이터 오염 방지)
         if (referrer && (
             referrer.includes('themediatrust') || 
             referrer.includes('gtmetrix') || 
             referrer.includes('bot') || 
-            referrer.includes('crawl'))) {
-            return res.json({ success: true, message: 'Bot Filtered' });
+            referrer.includes('crawl') ||
+            referrer.includes('headless'))) {
+            return res.json({ success: true, message: 'Filtered Bot' });
         }
 
-        // 유입 경로 분석 (한글화)
+        // 🔍 2. 유입 출처 한글화 및 도메인 정제
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        if (!referrer || referrer.trim() === '') source = '직접 방문';
-        else if (refLower.includes('naver.com')) source = '네이버';
+        if (!referrer || referrer.trim() === '') {
+            source = '직접 방문'; // 주소창 입력, 즐겨찾기, 앱 등
+        } else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
@@ -802,43 +806,65 @@ app.post('/api/track/log', async (req, res) => {
         else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
         else {
+            // 그 외 사이트는 도메인만 깔끔하게 추출
             try { source = new URL(referrer).hostname.replace('www.', ''); } 
             catch (e) { source = '기타'; }
         }
 
-        // 퍼널 단계 판단
-        let step = 'VISIT';
+        // 📊 3. 퍼널 단계 판단 (Cafe24 URL 기준)
+        let step = 'VISIT'; // 기본값: 일반 방문
         const urlLower = currentUrl.toLowerCase();
+
         if (urlLower.includes('/order/result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
+        // 💾 4. DB 저장
         await db.collection('access_logs').insertOne({
-            sessionId, source, step, currentUrl, createdAt: new Date()
+            sessionId,
+            source,
+            step,
+            currentUrl,
+            originalReferrer: referrer,
+            createdAt: new Date()
         });
+
         res.status(200).json({ success: true });
 
     } catch (error) {
-        console.error(error);
+        console.error('Log Error:', error);
         res.status(500).json({ success: false });
     }
 });
 
-// 2. 통계 조회 API
+// 2. 통계 조회 API (집계)
 app.get('/api/track/stats', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+        // 날짜 필터링 (기본값: 오늘 하루)
         const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0,0,0,0));
         const end = endDate ? new Date(new Date(endDate).setHours(23,59,59,999)) : new Date();
 
+        // MongoDB Aggregation (소스별/단계별 UV 집계)
         const stats = await db.collection('access_logs').aggregate([
             { $match: { createdAt: { $gte: start, $lte: end } } },
-            { $group: { _id: { source: "$source", step: "$step" }, uniqueUsers: { $addToSet: "$sessionId" } } },
-            { $project: { source: "$_id.source", step: "$_id.step", count: { $size: "$uniqueUsers" } } }
+            { 
+                $group: { 
+                    _id: { source: "$source", step: "$step" }, 
+                    uniqueUsers: { $addToSet: "$sessionId" } // 중복 세션 제거
+                } 
+            },
+            { 
+                $project: { 
+                    source: "$_id.source", 
+                    step: "$_id.step", 
+                    count: { $size: "$uniqueUsers" } 
+                } 
+            }
         ]).toArray();
 
-        // 프론트엔드에서 계산하기 쉽게 데이터 구조화
+        // 프론트에서 쓰기 편하게 변환
         const formattedData = {};
         stats.forEach(item => {
             if (!formattedData[item.source]) formattedData[item.source] = {};
@@ -847,9 +873,11 @@ app.get('/api/track/stats', async (req, res) => {
 
         res.json({ success: true, data: formattedData });
     } catch (error) {
+        console.error('Stats Error:', error);
         res.status(500).json({ success: false });
     }
 });
+
 // 2. 경로 이탈 및 전환율 분석 데이터 조회 API
 app.get('/api/track/stats', async (req, res) => {
     try {
