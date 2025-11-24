@@ -776,54 +776,114 @@ app.get('/download-excel', async (req, res) => {
 // ==========================================
 // [추가 기능] 유입 경로 및 퍼널 분석 로직
 // ==========================================
+// [수정된 서버 코드] 한글 적용 및 기타 도메인 세분화
 
-// 1. 고객 행동 로그 수집 API
+// 1. 로그 수집 API
 app.post('/api/track/log', async (req, res) => {
     try {
         const { currentUrl, referrer, sessionId } = req.body;
 
-        // 1-1. 유입 출처(Source) 판별
-        let source = 'others';
+        let source = '기타'; 
         const refLower = referrer ? referrer.toLowerCase() : '';
-        
-        if (refLower.includes('naver.com')) source = 'naver';
-        else if (refLower.includes('facebook.com')) source = 'facebook';
-        else if (refLower.includes('instagram.com')) source = 'instagram';
-        // 자사몰 내부 이동인 경우 기존 소스를 유지해야 하지만, 
-        // 여기서는 단순 로그 저장이므로 분석 단계에서 '첫 유입'을 기준으로 필터링합니다.
 
-        // 1-2. 퍼널 단계(Step) 판별
-        let step = 'VISIT'; // 기본 방문
-        const urlLower = currentUrl.toLowerCase();
-
-        if (urlLower.includes('/order/result.html')) {
-            step = 'PURCHASE'; // 결제 완료
-        } else if (urlLower.includes('/order/orderform.html')) {
-            step = 'CHECKOUT'; // 결제 페이지(주문서 작성)
-        } else if (urlLower.includes('/order/basket.html')) {
-            step = 'CART'; // 장바구니
-        } else if (urlLower.includes('/product/')) {
-            step = 'VIEW_ITEM'; // 상품 상세
+        // --- 유입 경로 정밀 분석 로직 ---
+        if (!referrer || referrer.trim() === '') {
+            source = '직접 방문'; // 주소창 입력 또는 즐겨찾기
+        } else {
+            // 주요 채널 한글 변환
+            if (refLower.includes('naver.com')) source = '네이버';
+            else if (refLower.includes('google')) source = '구글';
+            else if (refLower.includes('facebook.com')) source = '페이스북';
+            else if (refLower.includes('instagram.com')) source = '인스타그램';
+            else if (refLower.includes('daum.net')) source = '다음';
+            else if (refLower.includes('kakao.com')) source = '카카오';
+            else {
+                // 그 외 사이트는 도메인만 추출해서 저장 (예: https://aaa.com/bbs... -> aaa.com)
+                try {
+                    const urlObj = new URL(referrer);
+                    source = urlObj.hostname.replace('www.', ''); // www. 제거하고 도메인만
+                } catch (e) {
+                    source = '기타(분석불가)';
+                }
+            }
         }
 
-        // 1-3. 로그 데이터 구성
+        // 퍼널 단계 판단
+        let step = 'VISIT';
+        const urlLower = currentUrl.toLowerCase();
+
+        if (urlLower.includes('/order/result.html')) step = 'PURCHASE';
+        else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
+        else if (urlLower.includes('/order/basket.html')) step = 'CART';
+        else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
+
         const logData = {
-            sessionId,      // 유저 식별자 (프론트에서 생성)
-            source,         // 유입 채널 (naver, facebook, instagram, others)
-            originalReferrer: referrer, // 원본 리퍼러 주소
-            currentUrl,     // 현재 주소
-            step,           // 분석된 단계
-            createdAt: new Date() // 접속 시간
+            sessionId,
+            source, // 한글 또는 도메인 저장
+            originalReferrer: referrer,
+            currentUrl,
+            step,
+            createdAt: new Date()
         };
 
-        // 1-4. DB 저장 (access_logs 컬렉션 사용)
         await db.collection('access_logs').insertOne(logData);
-
         res.status(200).json({ success: true });
 
     } catch (error) {
         console.error('로그 저장 오류:', error);
-        res.status(500).json({ success: false, message: '로그 저장 실패' });
+        res.status(500).json({ success: false });
+    }
+});
+
+// 2. 통계 조회 API (동적 데이터 구조 지원)
+app.get('/api/track/stats', async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0,0,0,0));
+        const end = endDate ? new Date(new Date(endDate).setHours(23,59,59,999)) : new Date();
+
+        const stats = await db.collection('access_logs').aggregate([
+            { $match: { createdAt: { $gte: start, $lte: end } } },
+            {
+                $group: {
+                    _id: { source: "$source", step: "$step" },
+                    uniqueUsers: { $addToSet: "$sessionId" }
+                }
+            },
+            {
+                $project: {
+                    source: "$_id.source",
+                    step: "$_id.step",
+                    count: { $size: "$uniqueUsers" }
+                }
+            },
+            { $sort: { count: -1 } } // 방문 많은 순서로 정렬
+        ]).toArray();
+
+        // 데이터 포맷팅 (동적 키 생성)
+        const formattedData = {};
+
+        // 1. 집계된 데이터 매핑
+        stats.forEach(item => {
+            if (!formattedData[item.source]) {
+                // 초기화 (모든 단계 0으로)
+                formattedData[item.source] = { 
+                    VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 
+                };
+            }
+            formattedData[item.source][item.step] = item.count;
+        });
+
+        // 2. 데이터가 하나도 없을 때를 대비해 기본 필드 생성 (선택사항)
+        if (Object.keys(formattedData).length === 0) {
+            formattedData['데이터 없음'] = { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 };
+        }
+
+        res.json({ success: true, data: formattedData });
+
+    } catch (error) {
+        console.error('통계 오류:', error);
+        res.status(500).json({ success: false });
     }
 });
 
