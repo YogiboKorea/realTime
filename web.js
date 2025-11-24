@@ -815,7 +815,7 @@ app.post('/api/track/log', async (req, res) => {
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
 
-        if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
+        if (urlLower.includes('/order_result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
