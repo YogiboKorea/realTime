@@ -771,16 +771,13 @@ app.get('/download-excel', async (req, res) => {
 
 
 // ==========================================
-// [FINAL] server.js - 봇 차단 및 퍼널 분석
-// ==========================================
-// ==========================================
-// [FINAL] server.js - 최종 분석 로직
+// [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 통합본)
 // ==========================================
 
-// 1. 로그 수집 API (봇 차단 + 한글 분류)
+// 1. 로그 수집 API (봇 차단 + 한글 분류 + 회원ID 저장)
 app.post('/api/track/log', async (req, res) => {
     try {
-        const { currentUrl, referrer, sessionId } = req.body;
+        const { currentUrl, referrer, sessionId, memberId } = req.body;
 
         // 🚫 1. 봇/스캐너 필터링 (데이터 오염 방지)
         if (referrer && (
@@ -792,12 +789,12 @@ app.post('/api/track/log', async (req, res) => {
             return res.json({ success: true, message: 'Filtered Bot' });
         }
 
-        // 🔍 2. 유입 출처 한글화 및 도메인 정제
+        // 🔍 2. 유입 출처 한글화
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
         if (!referrer || referrer.trim() === '') {
-            source = '직접 방문'; // 주소창 입력, 즐겨찾기, 앱 등
+            source = '직접 방문';
         } else if (refLower.includes('naver.com')) source = '네이버';
         else if (refLower.includes('google')) source = '구글';
         else if (refLower.includes('facebook.com')) source = '페이스북';
@@ -806,23 +803,23 @@ app.post('/api/track/log', async (req, res) => {
         else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
         else {
-            // 그 외 사이트는 도메인만 깔끔하게 추출
             try { source = new URL(referrer).hostname.replace('www.', ''); } 
             catch (e) { source = '기타'; }
         }
 
-        // 📊 3. 퍼널 단계 판단 (Cafe24 URL 기준)
-        let step = 'VISIT'; // 기본값: 일반 방문
+        // 📊 3. 퍼널 단계 판단
+        let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
 
-        if (urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
+        if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
 
-        // 💾 4. DB 저장
+        // 💾 4. DB 저장 (memberId 추가됨)
         await db.collection('access_logs').insertOne({
             sessionId,
+            memberId: memberId || 'GUEST', // 회원이면 ID, 아니면 GUEST
             source,
             step,
             currentUrl,
@@ -838,21 +835,19 @@ app.post('/api/track/log', async (req, res) => {
     }
 });
 
-// 2. 통계 조회 API (집계)
+// 2. 통계 조회 API (대시보드 차트용 집계)
 app.get('/api/track/stats', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
-        // 날짜 필터링 (기본값: 오늘 하루)
         const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0,0,0,0));
         const end = endDate ? new Date(new Date(endDate).setHours(23,59,59,999)) : new Date();
 
-        // MongoDB Aggregation (소스별/단계별 UV 집계)
         const stats = await db.collection('access_logs').aggregate([
             { $match: { createdAt: { $gte: start, $lte: end } } },
             { 
                 $group: { 
                     _id: { source: "$source", step: "$step" }, 
-                    uniqueUsers: { $addToSet: "$sessionId" } // 중복 세션 제거
+                    uniqueUsers: { $addToSet: "$sessionId" } 
                 } 
             },
             { 
@@ -864,7 +859,6 @@ app.get('/api/track/stats', async (req, res) => {
             }
         ]).toArray();
 
-        // 프론트에서 쓰기 편하게 변환
         const formattedData = {};
         stats.forEach(item => {
             if (!formattedData[item.source]) formattedData[item.source] = {};
@@ -873,73 +867,57 @@ app.get('/api/track/stats', async (req, res) => {
 
         res.json({ success: true, data: formattedData });
     } catch (error) {
-        console.error('Stats Error:', error);
         res.status(500).json({ success: false });
     }
 });
 
-// 2. 경로 이탈 및 전환율 분석 데이터 조회 API
-app.get('/api/track/stats', async (req, res) => {
+// 3. [신규] 금일 방문자 목록 조회 API (팝업 리스트용)
+app.get('/api/track/visitors', async (req, res) => {
     try {
-        const { startDate, endDate } = req.query; // 조회 기간 (예: 2024-01-01)
+        const { date } = req.query;
+        const targetDate = date ? new Date(date) : new Date();
+        const start = new Date(targetDate); start.setHours(0,0,0,0);
+        const end = new Date(targetDate); end.setHours(23,59,59,999);
 
-        // 날짜 필터 설정 (기본값: 오늘)
-        const start = startDate ? new Date(startDate) : new Date(new Date().setHours(0,0,0,0));
-        const end = endDate ? new Date(new Date(endDate).setHours(23,59,59,999)) : new Date();
-
-        // MongoDB Aggregation Pipeline
-        const stats = await db.collection('access_logs').aggregate([
-            {
-                $match: {
-                    createdAt: { $gte: start, $lte: end } // 기간 필터
-                }
-            },
+        // 최신순 정렬 -> 세션별 그룹화 -> 가장 최근 활동 시간 기준 정렬
+        const visitors = await db.collection('access_logs').aggregate([
+            { $match: { createdAt: { $gte: start, $lte: end } } },
+            { $sort: { createdAt: -1 } },
             {
                 $group: {
-                    _id: {
-                        source: "$source", // 소스별 (naver, facebook 등)
-                        step: "$step"      // 단계별 (VIEW, CART 등)
-                    },
-                    uniqueUsers: { $addToSet: "$sessionId" } // 중복 세션 제거 (UV 기준)
+                    _id: "$sessionId",
+                    memberId: { $first: "$memberId" },
+                    lastAction: { $first: "$createdAt" },
+                    source: { $first: "$source" },
+                    totalActions: { $sum: 1 }
                 }
             },
-            {
-                $project: {
-                    source: "$_id.source",
-                    step: "$_id.step",
-                    count: { $size: "$uniqueUsers" } // 고유 방문자 수 계산
-                }
-            },
-            {
-                $sort: { source: 1, step: 1 } // 정렬
-            }
+            { $sort: { lastAction: -1 } }
         ]).toArray();
 
-        // 데이터 포맷팅 (프론트엔드에서 보기 편하게 가공)
-        const formattedData = {
-            naver: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 },
-            facebook: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 },
-            instagram: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 },
-            others: { VISIT: 0, VIEW_ITEM: 0, CART: 0, CHECKOUT: 0, PURCHASE: 0 }
-        };
-
-        stats.forEach(item => {
-            if (formattedData[item.source] && formattedData[item.source][item.step] !== undefined) {
-                formattedData[item.source][item.step] = item.count;
-            }
-        });
-
-        res.json({ success: true, data: formattedData });
-
-    } catch (error) {
-        console.error('통계 조회 오류:', error);
-        res.status(500).json({ success: false, message: '통계 조회 실패' });
+        res.json({ success: true, visitors });
+    } catch (e) {
+        res.status(500).json({ success: false });
     }
 });
 
+// 4. [신규] 특정 고객 이동 경로 상세 조회 API (팝업 그래프용)
+app.get('/api/track/journey', async (req, res) => {
+    try {
+        const { sessionId } = req.query;
+        
+        const journey = await db.collection('access_logs')
+            .find({ sessionId: sessionId })
+            .sort({ createdAt: 1 }) // 시간 순서대로 (과거 -> 현재)
+            .toArray();
 
+        res.json({ success: true, journey });
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
+});
 
-// 봇 데이터 삭제용 임시 API
+// 5. 봇 데이터 삭제용 임시 API
 app.get('/api/clean-bots', async (req, res) => {
     try {
         const result = await db.collection('access_logs').deleteMany({
@@ -950,9 +928,6 @@ app.get('/api/clean-bots', async (req, res) => {
         res.send('삭제 실패: ' + e.message);
     }
 });
-
-
-
 
 
 // --- 8. 서버 시작 ---
