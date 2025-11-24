@@ -829,6 +829,7 @@ app.post('/api/track/log', async (req, res) => {
             currentUrl,
             originalReferrer: referrer,
             cartItems: cartItems || [], // ★ 장바구니 상품 저장
+            marketing: marketing || null, // ★ [추가] 마케팅 정보 저장
             duration: 0, // ★ 체류시간 초기화
             createdAt: new Date()
         });
@@ -896,7 +897,7 @@ app.get('/api/track/stats', async (req, res) => {
     }
 });
 
-// 4. 금일 방문자 목록 조회 API (팝업 리스트용)
+// 4. 금일 방문자 목록 조회 API (수정됨: 마케팅 정보 포함)
 app.get('/api/track/visitors', async (req, res) => {
     try {
         const { date } = req.query;
@@ -911,6 +912,7 @@ app.get('/api/track/visitors', async (req, res) => {
                 $group: {
                     _id: "$sessionId",
                     memberId: { $first: "$memberId" },
+                    marketing: { $first: "$marketing" }, // ★ [여기 추가] 이 줄이 있어야 화면에 나옵니다!
                     lastAction: { $first: "$createdAt" },
                     source: { $first: "$source" },
                     totalActions: { $sum: 1 }
