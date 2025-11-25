@@ -987,7 +987,7 @@ const OFFLINE_STORES = [
     "현대미아",
     "현대울산"
 ];
-// 2. [POST] 좌수 카운트 증가 API (오늘 누적 & 월간 누적 동시 반환)
+// 2. [POST] 좌수 카운트 증가 API (버그 수정됨)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName } = req.body;
@@ -1003,7 +1003,7 @@ app.post('/api/jwasu/increment', async (req, res) => {
 
         const collection = db.collection(jwasuCollectionName);
 
-        // 1. 오늘 날짜 카운트 증가 (오늘 누적값 획득)
+        // 1. 오늘 날짜 카운트 증가
         const result = await collection.findOneAndUpdate(
             { date: todayStr, storeName: storeName },
             { 
@@ -1013,7 +1013,11 @@ app.post('/api/jwasu/increment', async (req, res) => {
             },
             { upsert: true, returnDocument: 'after' }
         );
-        const todayCount = result.value.count;
+
+        // [수정 포인트] MongoDB 드라이버 버전에 따라 리턴 구조가 다름을 방어하는 코드
+        // result.value가 있으면(구버전) 쓰고, 없으면 result 자체(신버전)를 씁니다.
+        const updatedDoc = result.value || result; 
+        const todayCount = updatedDoc.count;
 
         // 2. 이번 달 전체 누적 합계 계산
         const pipeline = [
@@ -1038,12 +1042,14 @@ app.post('/api/jwasu/increment', async (req, res) => {
         res.json({ 
             success: true, 
             storeName: storeName, 
-            todayCount: todayCount,   // 오늘 누적
+            todayCount: todayCount,    // 오늘 누적
             monthlyTotal: monthlyTotal // 이번달 총합
         });
 
     } catch (error) {
         console.error('좌수 증가 오류:', error);
+        // 에러 상세 내용을 로그로 확인하기 위해 error 객체 출력
+        console.log(error); 
         res.status(500).json({ success: false, message: '카운트 처리 중 오류 발생' });
     }
 });
