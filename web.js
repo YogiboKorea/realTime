@@ -1148,6 +1148,42 @@ app.get('/api/sales/graph', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false }); }
 });
 
+// [server.js 추가] 판매 데이터 입력 API
+
+// 1. 판매 등록 API (POST)
+app.post('/api/sales/record', async (req, res) => {
+    try {
+        const { store, amount } = req.body;
+
+        // sales 컬렉션에 저장
+        await db.collection('sales').insertOne({
+            store: store,       // 예: 'store_a' (강남점)
+            amount: parseInt(amount), // 예: 1
+            createdAt: new Date()
+        });
+
+        res.json({ success: true });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ success: false });
+    }
+});
+
+// [수정] 아까 만든 대시보드용 API도 '실제 DB'를 읽도록 수정
+// (기존 랜덤 로직을 이걸로 바꾸시면 연동됩니다)
+app.get('/api/sales/live-count', async (req, res) => {
+    try {
+        const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+        
+        // 오늘 날짜 데이터 개수 세기
+        const total = await db.collection('sales').countDocuments({ 
+            createdAt: { $gte: todayStart } 
+        });
+        
+        res.json({ success: true, totalCount: total, lastUpdated: new Date() });
+    } catch (e) { res.status(500).json({ success: false }); }
+});
+
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
