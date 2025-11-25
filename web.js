@@ -1026,43 +1026,64 @@ app.post('/api/jwasu/increment', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회 (날짜 필터 적용)
+// 3. [GET] 대시보드 데이터 조회 (월초 ~ 선택일까지 누적 집계)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
-        // [중요 수정] 프론트에서 보낸 날짜가 있으면 그 날짜로, 없으면 오늘 날짜로 설정
+        // 1. 날짜 범위 설정 로직
+        // 쿼리로 받은 날짜가 없으면 오늘 날짜 사용
         const queryDate = req.query.date;
-        const targetDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
+        const targetEndDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
+        
+        // 해당 날짜가 속한 달의 1일 구하기 (예: 2025-11-25 -> 2025-11-01)
+        const targetStartDate = moment(targetEndDate).startOf('month').format('YYYY-MM-DD');
 
         const collection = db.collection(jwasuCollectionName);
 
-        // 1. 해당 날짜의 데이터를 가져옴 (가라 데이터 아님, 실제 DB 조회)
-        const records = await collection.find({ date: targetDate }).toArray();
+        // 2. DB 조회: [월초 ~ 선택일] 사이의 모든 기록 가져오기
+        const records = await collection.find({ 
+            date: { 
+                $gte: targetStartDate, // 크거나 같다 (1일)
+                $lte: targetEndDate    // 작거나 같다 (선택일)
+            } 
+        }).toArray();
 
-        // 2. 전체 매장 리스트를 기준으로 데이터 매핑
-        // (DB에 데이터가 없으면 count: 0 으로 처리됨)
+        // 3. 매장별 누적 합계 계산 (Aggregation)
+        // DB에서 가져온 여러 날짜의 기록들을 매장별로 묶어서 더함
+        const storeAggregates = {};
+        
+        records.forEach(record => {
+            if (!storeAggregates[record.storeName]) {
+                storeAggregates[record.storeName] = 0;
+            }
+            storeAggregates[record.storeName] += record.count;
+        });
+
+        // 4. 전체 매장 리스트(OFFLINE_STORES)를 기준으로 최종 데이터 포맷팅
+        // 기록이 아예 없는 매장도 0으로 표시하기 위함
         const dashboardData = OFFLINE_STORES.map(store => {
-            const record = records.find(r => r.storeName === store);
             return {
                 storeName: store,
-                count: record ? record.count : 0, // 기록 없으면 0
+                // 계산해둔 합계가 있으면 쓰고, 없으면 0
+                count: storeAggregates[store] || 0, 
                 rank: 0 
             };
         });
 
-        // 3. 카운트 기준 내림차순 정렬
+        // 5. 카운트 기준 내림차순 정렬 (랭킹)
         dashboardData.sort((a, b) => b.count - a.count);
 
-        // 4. 랭킹 부여
+        // 6. 랭킹 번호 부여
         dashboardData.forEach((item, index) => {
             item.rank = index + 1;
         });
 
-        // 5. 전체 합계 계산
+        // 7. 전체 총합 계산
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
         res.json({ 
             success: true, 
-            date: targetDate,
+            startDate: targetStartDate, // 프론트 표시용 시작일
+            endDate: targetEndDate,     // 프론트 표시용 종료일 (선택일)
             totalCount: totalCount,
             data: dashboardData 
         });
@@ -1072,7 +1093,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
     }
 });
-
 // 4. [GET] 매장 리스트 조회 (드롭박스용)
 app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
