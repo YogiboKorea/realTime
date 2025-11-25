@@ -987,22 +987,23 @@ const OFFLINE_STORES = [
     "현대미아",
     "현대울산"
 ];
-
-// 2. [POST] 좌수 카운트 증가 API (매니저용 버튼)
+// 2. [POST] 좌수 카운트 증가 API (오늘 누적 & 월간 누적 동시 반환)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName } = req.body;
 
-        // 유효한 매장인지 검증
         if (!OFFLINE_STORES.includes(storeName)) {
             return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
         }
 
-        // 한국 시간 기준 오늘 날짜 생성 (YYYY-MM-DD)
-        const todayStr = moment().tz('Asia/Seoul').format('YYYY-MM-DD');
+        // 날짜 계산
+        const now = moment().tz('Asia/Seoul');
+        const todayStr = now.format('YYYY-MM-DD');
+        const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
+
         const collection = db.collection(jwasuCollectionName);
 
-        // 문서가 없으면 생성(count: 1), 있으면 증가($inc)
+        // 1. 오늘 날짜 카운트 증가 (오늘 누적값 획득)
         const result = await collection.findOneAndUpdate(
             { date: todayStr, storeName: storeName },
             { 
@@ -1012,12 +1013,33 @@ app.post('/api/jwasu/increment', async (req, res) => {
             },
             { upsert: true, returnDocument: 'after' }
         );
+        const todayCount = result.value.count;
 
-        // 업데이트된 현재 카운트 반환
+        // 2. 이번 달 전체 누적 합계 계산
+        const pipeline = [
+            { 
+                $match: { 
+                    storeName: storeName,
+                    date: { $gte: startOfMonth, $lte: todayStr }
+                } 
+            },
+            { 
+                $group: { 
+                    _id: null, 
+                    total: { $sum: "$count" }
+                } 
+            }
+        ];
+        
+        const aggResult = await collection.aggregate(pipeline).toArray();
+        const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : todayCount;
+
+        // 3. 두 가지 값 모두 반환
         res.json({ 
             success: true, 
             storeName: storeName, 
-            currentCount: result.value ? result.value.count : 1 
+            todayCount: todayCount,   // 오늘 누적
+            monthlyTotal: monthlyTotal // 이번달 총합
         });
 
     } catch (error) {
