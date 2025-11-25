@@ -1054,6 +1054,59 @@ app.post('/api/jwasu/increment', async (req, res) => {
     }
 });
 
+// [추가] 2-1. [POST] 좌수 카운트 취소 (Undo) API
+app.post('/api/jwasu/undo', async (req, res) => {
+    try {
+        const { storeName } = req.body;
+
+        // 오늘 날짜 및 이번 달 1일 계산
+        const now = moment().tz('Asia/Seoul');
+        const todayStr = now.format('YYYY-MM-DD');
+        const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
+
+        const collection = db.collection(jwasuCollectionName);
+
+        // 1. 해당 매장의 오늘 데이터 검색
+        const currentDoc = await collection.findOne({ date: todayStr, storeName: storeName });
+
+        // 데이터가 없거나 카운트가 0이면 취소 불가
+        if (!currentDoc || currentDoc.count <= 0) {
+            return res.status(400).json({ success: false, message: '취소할 내역이 없습니다.' });
+        }
+
+        // 2. 카운트 1 감소 ($inc: -1)
+        const result = await collection.findOneAndUpdate(
+            { date: todayStr, storeName: storeName },
+            { 
+                $inc: { count: -1 }, 
+                $set: { lastUpdated: new Date() } 
+            },
+            { returnDocument: 'after' }
+        );
+
+        // 3. 감소된 후의 이번 달 누적 합계 다시 계산
+        const pipeline = [
+            { $match: { storeName: storeName, date: { $gte: startOfMonth, $lte: todayStr } } },
+            { $group: { _id: null, total: { $sum: "$count" } } }
+        ];
+        
+        const aggResult = await collection.aggregate(pipeline).toArray();
+        const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : 0;
+
+        // 결과 반환
+        res.json({ 
+            success: true, 
+            storeName: storeName, 
+            todayCount: result.value ? result.value.count : result.count, // 버전 호환 처리
+            monthlyTotal: monthlyTotal 
+        });
+
+    } catch (error) {
+        console.error('취소 처리 오류:', error);
+        res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
+    }
+});
+
 // 3. [GET] 대시보드 데이터 조회 (월초 ~ 선택일까지 누적 집계)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
