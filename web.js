@@ -767,75 +767,86 @@ app.get('/download-excel', async (req, res) => {
         res.status(500).json({ success: false, message: '엑셀 파일 생성 오류' });
     }
 });
-
-
 // ==========================================
-// [섹션 B] 고객 행동 추적 및 퍼널 분석 (최종 통합 수정본)
+// [섹션 B] 고객 행동 추적 및 퍼널 분석 (API 연동 강화판)
 // ==========================================
 
-// 1. [핵심] 로그 수집 API (수정됨: marketing 변수 선언 추가)
+// 0. [신규] Cafe24 회원 정보(수신동의) 조회 함수
+async function fetchMemberMarketing(memberId) {
+    if (!memberId || memberId === 'GUEST') return null;
 
-// [server.js] app.post('/api/track/log') 내부
+    try {
+        // Cafe24 Admin API 호출 (회원 상세 정보)
+        const url = `https://${MALLID}.cafe24api.com/api/v2/admin/customers`;
+        const params = { member_id: memberId, fields: 'is_sms_receipt_on,is_email_receipt_on' };
+        
+        // 기존에 만들어둔 apiRequest 함수 재사용 (토큰 자동 관리)
+        const data = await apiRequest('GET', url, {}, params);
 
+        if (data.customers && data.customers.length > 0) {
+            const customer = data.customers[0];
+            return {
+                sms: customer.is_sms_receipt_on,   // 'T' or 'F'
+                email: customer.is_email_receipt_on // 'T' or 'F'
+            };
+        }
+        return null;
+    } catch (error) {
+        console.error('Member Info Fetch Error:', error.message);
+        return null;
+    }
+}
+
+// 1. [핵심] 로그 수집 API (Cafe24 API 조회 추가)
 app.post('/api/track/log', async (req, res) => {
     try {
-        const { currentUrl, referrer, sessionId, memberId, cartItems, marketing } = req.body;
+        const { currentUrl, referrer, sessionId, memberId, cartItems } = req.body;
+        // 프론트에서 marketing을 안 보내도 서버에서 조회하므로 제거
 
-        // 🚫 1. [필터링 강화] 봇, 시스템, 쓰레기 데이터 차단 (저장 안 함)
+        // 🚫 1. 봇 필터링
         if (referrer && (
             referrer.includes('themediatrust') || 
             referrer.includes('gtmetrix') || 
             referrer.includes('bot') || 
             referrer.includes('crawl') ||
-            referrer.includes('headless') ||
-            referrer.includes('ntp.msn') ||  // 🗑️ 시간 서버(노이즈)
-            referrer.includes('localhost')    // 🗑️ 개발 테스트
-        )) {
-            return res.json({ success: true, message: 'Filtered Bot/System' });
+            referrer.includes('headless'))) {
+            return res.json({ success: true, message: 'Filtered Bot' });
         }
 
-        // 🔍 2. 유입 출처 정밀 분류
+        // 🔍 2. 유입 출처 분류
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        // (1) 직접 방문 & 내부 이동
         if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
             source = '주소 직접 입력 방문'; 
         } 
-        // (2) 관리자/ERP 접속 (직원 접속 분리)
-        else if (refLower.includes('erpnew') || refLower.includes('admin') || refLower.includes('cafe24.com')) {
-            source = '관리자/내부접속'; 
-        }
-        // (3) 검색엔진 그룹
         else if (refLower.includes('naver.com')) source = '네이버';
-        else if (refLower.includes('google') || refLower.includes('android.google')) source = '구글';
-        else if (refLower.includes('duckduckgo')) source = '덕덕고(검색)'; // 🦆 추가됨
-        else if (refLower.includes('bing.com')) source = '빙(검색)';
-        else if (refLower.includes('daum.net')) source = '다음';
-        
-        // (4) 소셜/광고 그룹
+        else if (refLower.includes('google')) source = '구글';
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
         else if (refLower.includes('criteo.com')) source = '크리테오(광고)';
         else if (refLower.includes('kakao.com')) source = '카카오';
+        else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
-        
-        // (5) 그 외 (도메인만 추출)
         else {
             try { source = new URL(referrer).hostname.replace('www.', ''); } 
-            catch (e) { source = '기타 웹사이트'; }
+            catch (e) { source = '기타'; }
         }
 
-        // ... (이하 step 판단 및 DB 저장 로직은 기존과 동일) ...
-        
         // 📊 3. 퍼널 단계 판단
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
-
         if (urlLower.includes('/order/result.html') || urlLower.includes('/order/order_result.html')) step = 'PURCHASE';
         else if (urlLower.includes('/order/orderform.html')) step = 'CHECKOUT';
         else if (urlLower.includes('/order/basket.html')) step = 'CART';
         else if (urlLower.includes('/product/')) step = 'VIEW_ITEM';
+
+        // ★ [추가] 회원이면 Cafe24 API로 수신동의 여부 조회 (서버가 직접 함)
+        let marketingInfo = null;
+        if (memberId && memberId !== 'GUEST') {
+            // API 호출 (비동기지만 로그 저장을 위해 await)
+            marketingInfo = await fetchMemberMarketing(memberId);
+        }
 
         // 💾 4. DB 저장
         const result = await db.collection('access_logs').insertOne({
@@ -846,7 +857,7 @@ app.post('/api/track/log', async (req, res) => {
             currentUrl,
             originalReferrer: referrer,
             cartItems: cartItems || [],
-            marketing: marketing || null,
+            marketing: marketingInfo, // 서버에서 조회한 정확한 정보 저장
             duration: 0,
             createdAt: new Date()
         });
@@ -859,25 +870,23 @@ app.post('/api/track/log', async (req, res) => {
     }
 });
 
-// 2. [신규] 체류 시간 업데이트 API (페이지 이탈 시 호출됨)
+// 2. 체류 시간 업데이트 API
 app.post('/api/track/time', async (req, res) => {
     try {
         const { logId, duration } = req.body;
         if (!logId) return res.json({ success: false });
 
-        // 해당 로그를 찾아 체류시간(초) 업데이트
         await db.collection('access_logs').updateOne(
             { _id: new ObjectId(logId) },
             { $set: { duration: parseInt(duration) } }
         );
         res.status(200).json({ success: true });
     } catch (error) {
-        console.error('Time Update Error:', error);
         res.status(200).send();
     }
 });
 
-// 3. 통계 조회 API (대시보드 차트용)
+// 3. 통계 조회 API
 app.get('/api/track/stats', async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
@@ -886,19 +895,8 @@ app.get('/api/track/stats', async (req, res) => {
 
         const stats = await db.collection('access_logs').aggregate([
             { $match: { createdAt: { $gte: start, $lte: end } } },
-            { 
-                $group: { 
-                    _id: { source: "$source", step: "$step" }, 
-                    uniqueUsers: { $addToSet: "$sessionId" } 
-                } 
-            },
-            { 
-                $project: { 
-                    source: "$_id.source", 
-                    step: "$_id.step", 
-                    count: { $size: "$uniqueUsers" } 
-                } 
-            }
+            { $group: { _id: { source: "$source", step: "$step" }, uniqueUsers: { $addToSet: "$sessionId" } } },
+            { $project: { source: "$_id.source", step: "$_id.step", count: { $size: "$uniqueUsers" } } }
         ]).toArray();
 
         const formattedData = {};
@@ -913,7 +911,7 @@ app.get('/api/track/stats', async (req, res) => {
     }
 });
 
-// 4. 금일 방문자 목록 조회 API (마케팅 정보 포함 수정)
+// 4. 금일 방문자 목록 조회 API
 app.get('/api/track/visitors', async (req, res) => {
     try {
         const { date } = req.query;
@@ -928,10 +926,7 @@ app.get('/api/track/visitors', async (req, res) => {
                 $group: {
                     _id: "$sessionId",
                     memberId: { $first: "$memberId" },
-                    
-                    // ★ [핵심 수정] 이 줄이 없어서 화면에 안 나왔던 겁니다!
-                    marketing: { $first: "$marketing" }, 
-                    
+                    marketing: { $first: "$marketing" }, // 저장된 마케팅 정보 반환
                     lastAction: { $first: "$createdAt" },
                     source: { $first: "$source" },
                     totalActions: { $sum: 1 }
@@ -946,16 +941,14 @@ app.get('/api/track/visitors', async (req, res) => {
     }
 });
 
-// 5. 특정 고객 이동 경로 상세 조회 API (팝업 그래프용)
+// 5. 특정 고객 이동 경로 상세 조회 API
 app.get('/api/track/journey', async (req, res) => {
     try {
         const { sessionId } = req.query;
-        
         const journey = await db.collection('access_logs')
             .find({ sessionId: sessionId })
             .sort({ createdAt: 1 })
             .toArray();
-
         res.json({ success: true, journey });
     } catch (e) {
         res.status(500).json({ success: false });
@@ -973,6 +966,7 @@ app.get('/api/clean-bots', async (req, res) => {
         res.send('삭제 실패: ' + e.message);
     }
 });
+
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
