@@ -970,22 +970,13 @@ app.get('/api/clean-bots', async (req, res) => {
 
 
 
-
-
-
-
-
-
-//좌수왕 DB 데이터 관리 
-
 // ==========================================
-// [섹션 C] 오프라인 좌수왕(Seat Count) 시스템
+// [섹션 C] 오프라인 좌수왕(Seat Count) 시스템 (최종 정제버전)
 // ==========================================
 
 const jwasuCollectionName = 'offline_jwasu'; // 좌수 데이터 컬렉션
 
-// 1. 관리 대상 매장 리스트 (이미지 기반 하드코딩)
-// 필요시 DB에서 관리하도록 변경 가능하나, 현재는 고정 리스트로 처리
+// 1. 관리 대상 매장 리스트
 const OFFLINE_STORES = [
     "롯데안산",
     "롯데동탄",
@@ -997,7 +988,7 @@ const OFFLINE_STORES = [
     "현대울산"
 ];
 
-// 2. [POST] 좌수 카운트 증가 API (매니저용 버튼 클릭 시 호출)
+// 2. [POST] 좌수 카운트 증가 API (매니저용 버튼)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName } = req.body;
@@ -1008,20 +999,18 @@ app.post('/api/jwasu/increment', async (req, res) => {
         }
 
         // 한국 시간 기준 오늘 날짜 생성 (YYYY-MM-DD)
-        // 00시~23시59분 기준을 맞추기 위해 날짜 스트링을 키로 사용
         const todayStr = moment().tz('Asia/Seoul').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
 
-        // upsert: true 옵션으로 문서가 없으면 생성(count: 1), 있으면 증가($inc)
+        // 문서가 없으면 생성(count: 1), 있으면 증가($inc)
         const result = await collection.findOneAndUpdate(
-            { date: todayStr, storeName: storeName }, // 검색 조건
+            { date: todayStr, storeName: storeName },
             { 
-                $inc: { count: 1 }, // 1 증가
-                $set: { lastUpdated: new Date() }, // 마지막 업데이트 시간
-                $setOnInsert: { createdAt: new Date() } // 문서 처음 생성 시에만 기록
+                $inc: { count: 1 }, 
+                $set: { lastUpdated: new Date() },
+                $setOnInsert: { createdAt: new Date() }
             },
-            { upsert: true, returnDocument: 'after' } // 업데이트 후 최신 문서 반환
+            { upsert: true, returnDocument: 'after' }
         );
 
         // 업데이트된 현재 카운트 반환
@@ -1037,26 +1026,30 @@ app.post('/api/jwasu/increment', async (req, res) => {
     }
 });
 
-// 3. [GET] 실시간 대시보드용 데이터 조회 API
+// 3. [GET] 대시보드 데이터 조회 (날짜 필터 적용)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
-        const todayStr = moment().tz('Asia/Seoul').format('YYYY-MM-DD');
+        // [중요 수정] 프론트에서 보낸 날짜가 있으면 그 날짜로, 없으면 오늘 날짜로 설정
+        const queryDate = req.query.date;
+        const targetDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
+
         const collection = db.collection(jwasuCollectionName);
 
-        // 1. 오늘 날짜의 기록된 데이터를 가져옴
-        const records = await collection.find({ date: todayStr }).toArray();
+        // 1. 해당 날짜의 데이터를 가져옴 (가라 데이터 아님, 실제 DB 조회)
+        const records = await collection.find({ date: targetDate }).toArray();
 
-        // 2. 전체 매장 리스트를 기준으로 데이터 매핑 (기록이 없는 매장은 0으로 표시하기 위함)
+        // 2. 전체 매장 리스트를 기준으로 데이터 매핑
+        // (DB에 데이터가 없으면 count: 0 으로 처리됨)
         const dashboardData = OFFLINE_STORES.map(store => {
             const record = records.find(r => r.storeName === store);
             return {
                 storeName: store,
                 count: record ? record.count : 0, // 기록 없으면 0
-                rank: 0 // 아래에서 계산
+                rank: 0 
             };
         });
 
-        // 3. 카운트 기준 내림차순 정렬 (랭킹 산정)
+        // 3. 카운트 기준 내림차순 정렬
         dashboardData.sort((a, b) => b.count - a.count);
 
         // 4. 랭킹 부여
@@ -1064,10 +1057,13 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             item.rank = index + 1;
         });
 
+        // 5. 전체 합계 계산
+        const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
+
         res.json({ 
             success: true, 
-            date: todayStr,
-            totalCount: dashboardData.reduce((acc, cur) => acc + cur.count, 0), // 전체 합계
+            date: targetDate,
+            totalCount: totalCount,
             data: dashboardData 
         });
 
@@ -1077,152 +1073,14 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
     }
 });
 
-// 4. [GET] 매장 리스트 조회 (프론트엔드 버튼 생성용)
+// 4. [GET] 매장 리스트 조회 (드롭박스용)
 app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
 
 
-// [server.js 추가] 실시간 좌수 및 그래프 데이터 API
 
-// 1. 실시간 총 좌수 및 마지막 업데이트 시간 조회
-app.get('/api/sales/live-count', async (req, res) => {
-    try {
-        // 실제 주문 DB(orders)에서 오늘 날짜 판매량 합산
-        // (여기서는 테스트를 위해 access_logs의 개수를 좌수로 가정하거나, 랜덤값 사용)
-        
-        // [실제 로직 예시]
-        // const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-        // const total = await db.collection('orders').countDocuments({ createdAt: { $gte: todayStart } });
-        // const lastOrder = await db.collection('orders').findOne({}, { sort: { createdAt: -1 } });
-
-        // [테스트용 가상 데이터]
-        const total = Math.floor(Math.random() * 100) + 1500; // 예: 1500 ~ 1600 사이
-        const lastTime = new Date(); 
-
-        res.json({ 
-            success: true, 
-            totalCount: total, 
-            lastUpdated: lastTime 
-        });
-    } catch (e) { res.status(500).json({ success: false }); }
-});
-
-// 2. 매장별 일별/누적 그래프 데이터 조회
-app.get('/api/sales/graph', async (req, res) => {
-    try {
-        const { store, startDate, endDate } = req.query;
-        
-        // 날짜 배열 생성 (시작일~종료일)
-        let dateArray = [];
-        let currDate = new Date(startDate);
-        const stopDate = new Date(endDate);
-        while (currDate <= stopDate) {
-            dateArray.push(currDate.toISOString().split('T')[0]);
-            currDate.setDate(currDate.getDate() + 1);
-        }
-
-        // [테스트용 가상 데이터 생성] - 실제로는 DB에서 group by date로 가져와야 함
-        let cumulative = 0;
-        const labels = dateArray;
-        const dailyData = [];
-        const cumulativeData = [];
-
-        labels.forEach(date => {
-            // 매장별로 다른 데이터 주는 척
-            let randomSale = Math.floor(Math.random() * 50); 
-            if(store === 'store_a') randomSale += 20; // A매장은 더 잘팜
-
-            dailyData.push(randomSale);
-            cumulative += randomSale;
-            cumulativeData.push(cumulative);
-        });
-
-        res.json({ 
-            success: true, 
-            labels, 
-            dailyData, 
-            cumulativeData 
-        });
-    } catch (e) { res.status(500).json({ success: false }); }
-});
-
-// [server.js 추가] 판매 데이터 입력 API
-
-// 1. 판매 등록 API (POST)
-app.post('/api/sales/record', async (req, res) => {
-    try {
-        const { store, amount } = req.body;
-
-        // sales 컬렉션에 저장
-        await db.collection('sales').insertOne({
-            store: store,       // 예: 'store_a' (강남점)
-            amount: parseInt(amount), // 예: 1
-            createdAt: new Date()
-        });
-
-        res.json({ success: true });
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ success: false });
-    }
-});
-
-// [수정] 아까 만든 대시보드용 API도 '실제 DB'를 읽도록 수정
-// (기존 랜덤 로직을 이걸로 바꾸시면 연동됩니다)
-app.get('/api/sales/live-count', async (req, res) => {
-    try {
-        const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-        
-        // 오늘 날짜 데이터 개수 세기
-        const total = await db.collection('sales').countDocuments({ 
-            createdAt: { $gte: todayStart } 
-        });
-        
-        res.json({ success: true, totalCount: total, lastUpdated: new Date() });
-    } catch (e) { res.status(500).json({ success: false }); }
-});
-
-// [server.js 추가] 매장별/일별 판매 현황 집계 API (표 만들기용)
-app.get('/api/sales/table', async (req, res) => {
-    try {
-        const { store, startDate, endDate } = req.query;
-        
-        // 1. 날짜 필터링 조건
-        const matchQuery = {
-            createdAt: {
-                $gte: new Date(`${startDate}T00:00:00`),
-                $lte: new Date(`${endDate}T23:59:59`)
-            }
-        };
-        
-        // 2. 특정 매장만 볼 경우 조건 추가
-        if (store && store !== 'all') {
-            matchQuery.store = store;
-        }
-
-        // 3. MongoDB 집계 (일별 + 매장별 그룹화)
-        const report = await db.collection('sales').aggregate([
-            { $match: matchQuery },
-            {
-                $group: {
-                    _id: {
-                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } },
-                        store: "$store"
-                    },
-                    dailyCount: { $sum: "$amount" }
-                }
-            },
-            { $sort: { "_id.date": -1, "_id.store": 1 } } // 최신 날짜순, 매장명순 정렬
-        ]).toArray();
-
-        res.json({ success: true, report });
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ success: false });
-    }
-});
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
