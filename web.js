@@ -1184,7 +1184,45 @@ app.get('/api/sales/live-count', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false }); }
 });
 
+// [server.js 추가] 매장별/일별 판매 현황 집계 API (표 만들기용)
+app.get('/api/sales/table', async (req, res) => {
+    try {
+        const { store, startDate, endDate } = req.query;
+        
+        // 1. 날짜 필터링 조건
+        const matchQuery = {
+            createdAt: {
+                $gte: new Date(`${startDate}T00:00:00`),
+                $lte: new Date(`${endDate}T23:59:59`)
+            }
+        };
+        
+        // 2. 특정 매장만 볼 경우 조건 추가
+        if (store && store !== 'all') {
+            matchQuery.store = store;
+        }
 
+        // 3. MongoDB 집계 (일별 + 매장별 그룹화)
+        const report = await db.collection('sales').aggregate([
+            { $match: matchQuery },
+            {
+                $group: {
+                    _id: {
+                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } },
+                        store: "$store"
+                    },
+                    dailyCount: { $sum: "$amount" }
+                }
+            },
+            { $sort: { "_id.date": -1, "_id.store": 1 } } // 최신 날짜순, 매장명순 정렬
+        ]).toArray();
+
+        res.json({ success: true, report });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ success: false });
+    }
+});
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
