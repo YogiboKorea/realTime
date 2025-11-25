@@ -774,41 +774,60 @@ app.get('/download-excel', async (req, res) => {
 // ==========================================
 
 // 1. [핵심] 로그 수집 API (수정됨: marketing 변수 선언 추가)
+
+// [server.js] app.post('/api/track/log') 내부
+
 app.post('/api/track/log', async (req, res) => {
     try {
-        // ★ [수정] 여기에 ', marketing'이 빠져있었습니다. 추가했습니다!
         const { currentUrl, referrer, sessionId, memberId, cartItems, marketing } = req.body;
 
-        // 🚫 1. 봇/스캐너 필터링
+        // 🚫 1. [필터링 강화] 봇, 시스템, 쓰레기 데이터 차단 (저장 안 함)
         if (referrer && (
             referrer.includes('themediatrust') || 
             referrer.includes('gtmetrix') || 
             referrer.includes('bot') || 
             referrer.includes('crawl') ||
-            referrer.includes('headless'))) {
-            return res.json({ success: true, message: 'Filtered Bot' });
+            referrer.includes('headless') ||
+            referrer.includes('ntp.msn') ||  // 🗑️ 시간 서버(노이즈)
+            referrer.includes('localhost')    // 🗑️ 개발 테스트
+        )) {
+            return res.json({ success: true, message: 'Filtered Bot/System' });
         }
 
-        // 🔍 2. 유입 출처 한글화 및 도메인 정제
+        // 🔍 2. 유입 출처 정밀 분류
         let source = '기타';
         const refLower = referrer ? referrer.toLowerCase() : '';
 
-        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')|| refLower.includes('yogibo.cafe24.com')) {
-            source = '다이렉트방문'; 
+        // (1) 직접 방문 & 내부 이동
+        if (!referrer || referrer.trim() === '' || refLower.includes('yogibo.kr')) {
+            source = '주소 직접 입력 방문'; 
         } 
+        // (2) 관리자/ERP 접속 (직원 접속 분리)
+        else if (refLower.includes('erpnew') || refLower.includes('admin') || refLower.includes('cafe24.com')) {
+            source = '관리자/내부접속'; 
+        }
+        // (3) 검색엔진 그룹
         else if (refLower.includes('naver.com')) source = '네이버';
-        else if (refLower.includes('google')) source = '구글';
+        else if (refLower.includes('google') || refLower.includes('android.google')) source = '구글';
+        else if (refLower.includes('duckduckgo')) source = '덕덕고(검색)'; // 🦆 추가됨
+        else if (refLower.includes('bing.com')) source = '빙(검색)';
+        else if (refLower.includes('daum.net')) source = '다음';
+        
+        // (4) 소셜/광고 그룹
         else if (refLower.includes('facebook.com')) source = '페이스북';
         else if (refLower.includes('instagram.com')) source = '인스타그램';
         else if (refLower.includes('criteo.com')) source = '크리테오(광고)';
         else if (refLower.includes('kakao.com')) source = '카카오';
-        else if (refLower.includes('daum.net')) source = '다음';
         else if (refLower.includes('youtube.com')) source = '유튜브';
+        
+        // (5) 그 외 (도메인만 추출)
         else {
             try { source = new URL(referrer).hostname.replace('www.', ''); } 
-            catch (e) { source = '기타'; }
+            catch (e) { source = '기타 웹사이트'; }
         }
 
+        // ... (이하 step 판단 및 DB 저장 로직은 기존과 동일) ...
+        
         // 📊 3. 퍼널 단계 판단
         let step = 'VISIT';
         const urlLower = currentUrl.toLowerCase();
@@ -827,7 +846,7 @@ app.post('/api/track/log', async (req, res) => {
             currentUrl,
             originalReferrer: referrer,
             cartItems: cartItems || [],
-            marketing: marketing || null, // 이제 에러가 나지 않습니다.
+            marketing: marketing || null,
             duration: 0,
             createdAt: new Date()
         });
@@ -894,7 +913,7 @@ app.get('/api/track/stats', async (req, res) => {
     }
 });
 
-// 4. 금일 방문자 목록 조회 API (수정됨: 마케팅 정보 포함)
+// 4. 금일 방문자 목록 조회 API (마케팅 정보 포함 수정)
 app.get('/api/track/visitors', async (req, res) => {
     try {
         const { date } = req.query;
@@ -909,7 +928,10 @@ app.get('/api/track/visitors', async (req, res) => {
                 $group: {
                     _id: "$sessionId",
                     memberId: { $first: "$memberId" },
-                    marketing: { $first: "$marketing" }, // ★ [여기 추가] 이 줄이 있어야 화면에 나옵니다!
+                    
+                    // ★ [핵심 수정] 이 줄이 없어서 화면에 안 나왔던 겁니다!
+                    marketing: { $first: "$marketing" }, 
+                    
                     lastAction: { $first: "$createdAt" },
                     source: { $first: "$source" },
                     totalActions: { $sum: 1 }
