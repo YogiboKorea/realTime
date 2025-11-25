@@ -1098,7 +1098,38 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
+// 5. [GET] 기간별/매장별 상세 집계표 조회 API (table.html용)
+app.get('/api/jwasu/table', async (req, res) => {
+    try {
+        const { store, startDate, endDate } = req.query;
 
+        // 1. 검색 조건 설정
+        const query = {
+            date: {
+                $gte: startDate, // 시작일
+                $lte: endDate    // 종료일
+            }
+        };
+
+        // 전체가 아닐 경우 매장명 필터 추가
+        if (store && store !== 'all') {
+            query.storeName = store;
+        }
+
+        const collection = db.collection(jwasuCollectionName);
+
+        // 2. 데이터 조회 및 정렬 (날짜 내림차순 -> 매장명 오름차순)
+        const report = await collection.find(query)
+            .sort({ date: -1, storeName: 1 })
+            .toArray();
+
+        res.json({ success: true, report });
+
+    } catch (error) {
+        console.error('집계표 조회 오류:', error);
+        res.status(500).json({ success: false, message: '데이터 조회 실패' });
+    }
+});
 
 
 // --- 8. 서버 시작 ---
