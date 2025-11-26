@@ -1274,6 +1274,55 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
     }
 });
 
+// 7. [GET] 특정 매장 내 통계 (일별/월별) 조회 API
+app.get('/api/jwasu/my-stats', async (req, res) => {
+    try {
+        const { storeName } = req.query;
+        if (!storeName) return res.status(400).json({ success: false, message: '매장명이 필요합니다.' });
+
+        const now = moment().tz('Asia/Seoul');
+        const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
+        const sixMonthsAgo = now.clone().subtract(5, 'months').startOf('month').format('YYYY-MM-DD');
+
+        const collection = db.collection(jwasuCollectionName);
+
+        // 1. [일별] 이번 달 일별 데이터 조회
+        const dailyRecords = await collection.find({
+            storeName: storeName,
+            date: { $gte: startOfThisMonth }
+        }).sort({ date: -1 }).toArray();
+
+        // 2. [월별] 최근 6개월 월별 누적 집계
+        const monthlyPipeline = [
+            {
+                $match: {
+                    storeName: storeName,
+                    date: { $gte: sixMonthsAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: { $substr: ["$date", 0, 7] }, // "YYYY-MM" 추출
+                    total: { $sum: "$count" }
+                }
+            },
+            { $sort: { _id: -1 } } // 최신 월 순서
+        ];
+        const monthlyRecords = await collection.aggregate(monthlyPipeline).toArray();
+
+        res.json({
+            success: true,
+            daily: dailyRecords,
+            monthly: monthlyRecords
+        });
+
+    } catch (error) {
+        console.error('내 통계 조회 오류:', error);
+        res.status(500).json({ success: false, message: '통계 조회 실패' });
+    }
+});
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
