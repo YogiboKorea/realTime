@@ -1273,7 +1273,8 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
         res.status(500).json({ success: false, message: '월별 기록 조회 실패' });
     }
 });
-// 7. [GET] 특정 매장 내 통계 (일별/월별) 조회 API (수정됨: 이번 달 범위 한정)
+
+// 7. [GET] 특정 매장 내 통계 (이번 달 일별 내역만) 조회 API
 app.get('/api/jwasu/my-stats', async (req, res) => {
     try {
         const { storeName } = req.query;
@@ -1281,43 +1282,21 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
 
         const now = moment().tz('Asia/Seoul');
         
-        // 1. 이번 달의 시작일(1일)과 마지막 날(말일) 계산
+        // 이번 달의 시작일(1일)과 마지막 날(말일) 계산
         const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
         const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
-        
-        // 2. 최근 6개월 전 (월별 통계용)
-        const sixMonthsAgo = now.clone().subtract(5, 'months').startOf('month').format('YYYY-MM-DD');
 
         const collection = db.collection(jwasuCollectionName);
 
-        // [수정] 일별 데이터: 정확히 '이번 달 1일 ~ 말일' 사이 데이터만 조회
+        // [수정] 이번 달 일별 데이터만 조회 (최신순 정렬)
         const dailyRecords = await collection.find({
             storeName: storeName,
             date: { $gte: startOfThisMonth, $lte: endOfThisMonth }
         }).sort({ date: -1 }).toArray();
 
-        // [기존 유지] 월별 데이터: 최근 6개월
-        const monthlyPipeline = [
-            {
-                $match: {
-                    storeName: storeName,
-                    date: { $gte: sixMonthsAgo }
-                }
-            },
-            {
-                $group: {
-                    _id: { $substr: ["$date", 0, 7] }, // "YYYY-MM"
-                    total: { $sum: "$count" }
-                }
-            },
-            { $sort: { _id: -1 } }
-        ];
-        const monthlyRecords = await collection.aggregate(monthlyPipeline).toArray();
-
         res.json({
             success: true,
-            daily: dailyRecords,
-            monthly: monthlyRecords
+            data: dailyRecords // 일별 데이터만 반환
         });
 
     } catch (error) {
@@ -1325,6 +1304,7 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
         res.status(500).json({ success: false, message: '통계 조회 실패' });
     }
 });
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
