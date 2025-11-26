@@ -1213,6 +1213,78 @@ app.get('/api/jwasu/table', async (req, res) => {
 });
 
 
+
+// 6. [GET] 월별 좌수왕(명예의 전당) 히스토리 조회 API (추가)
+app.get('/api/jwasu/monthly-history', async (req, res) => {
+    try {
+        // 클라이언트에서 보낸 month 값 (예: "2025-10")
+        const { month } = req.query; 
+
+        if (!month) {
+            return res.status(400).json({ success: false, message: '월(month) 정보가 필요합니다.' });
+        }
+
+        // 1. 해당 월의 시작일과 종료일 계산
+        // moment를 사용하여 해당 월의 1일과 마지막 날을 구함 (예: 2025-10-01 ~ 2025-10-31)
+        const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
+        const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
+
+        const collection = db.collection(jwasuCollectionName);
+
+        // 2. DB Aggregation (집계) 실행
+        // - match: 해당 기간(월초~월말) 내의 데이터만 필터링
+        // - group: 매장명(storeName)별로 묶어서 count를 합산($sum)
+        const pipeline = [
+            {
+                $match: {
+                    date: { $gte: startOfMonth, $lte: endOfMonth }
+                }
+            },
+            {
+                $group: {
+                    _id: "$storeName",
+                    totalCount: { $sum: "$count" }
+                }
+            }
+        ];
+
+        const aggResults = await collection.aggregate(pipeline).toArray();
+
+        // 3. 집계 결과(aggResults)를 검색하기 쉬운 객체(Map) 형태로 변환
+        // 예: [ {_id: "롯데안산", totalCount: 50} ] -> { "롯데안산": 50 }
+        const resultMap = {};
+        aggResults.forEach(item => {
+            resultMap[item._id] = item.totalCount;
+        });
+
+        // 4. 전체 매장 리스트(OFFLINE_STORES)를 기준으로 최종 데이터 완성
+        // (데이터가 0건인 매장도 리스트에 포함시키기 위함)
+        const historyData = OFFLINE_STORES.map(store => {
+            return {
+                storeName: store,
+                count: resultMap[store] || 0, // DB에 없으면 0 처리
+                rank: 0
+            };
+        });
+
+        // 5. 카운트 기준 내림차순 정렬 (랭킹 산정)
+        historyData.sort((a, b) => b.count - a.count);
+
+        // 6. 랭킹 번호 부여
+        historyData.forEach((item, index) => {
+            item.rank = index + 1;
+        });
+
+        // 결과 반환 (배열 형태)
+        res.json(historyData);
+
+    } catch (error) {
+        console.error('월별 기록 조회 오류:', error);
+        res.status(500).json({ success: false, message: '월별 기록 조회 실패' });
+    }
+});
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
