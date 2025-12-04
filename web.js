@@ -1408,49 +1408,56 @@ app.post('/api/play-event', async (req, res) => {
       res.status(500).json({ success: false, message: '서버 오류' });
     }
   });
-
-
-// [당첨자 명단 조회 API] - 날짜 제한 없이 최근 당첨자 조회
+// [당첨자 명단 조회 API] - 수정버전 (날짜 필드 호환성 개선)
 app.get('/api/event-winners', async (req, res) => {
     try {
       const collection = db.collection('event12_collection');
   
-      // 1. 날짜 제한 없이(status: 'win') 당첨자 조회
-      // 최신순(updatedAt: -1)으로 정렬하여 최근 50명만 가져옴
+      // 1. 날짜 제한 없이 당첨자(status: 'win') 조회
       const winners = await collection.find({ 
         status: 'win' 
       })
-      .sort({ updatedAt: -1 }) 
-      .limit(50) // 너무 많아지면 로딩 느려지니 최근 50명까지만
+      .limit(50) 
       .toArray();
   
-      // 2. 아이디 마스킹 및 날짜 포맷팅
+      // 2. 가공 및 정렬 (애플리케이션 레벨에서 처리)
       const maskedWinners = winners.map(w => {
         let id = w.userId || 'guest';
         
-        // 아이디 마스킹 (앞 3자리 + ****)
+        // 아이디 마스킹
         if (id.length > 3) {
           id = id.substring(0, 3) + '****';
         } else {
           id = id + '****';
         }
   
+        // ★ [핵심 수정] updatedAt이 없으면 createdAt을 사용
+        const dateTarget = w.updatedAt ? w.updatedAt : w.createdAt;
+  
         return {
           maskedId: id,
-          prize: '100원 딜', // 혹은 w.result 값 사용
-          // ★수정됨: 날짜 구분을 위해 '월.일 시:분' 형식으로 변경 (예: 12.05 14:30)
-          time: moment(w.updatedAt).tz('Asia/Seoul').format('MM.DD HH:mm') 
+          prize: '100원 딜',
+          // 날짜 포맷팅
+          time: moment(dateTarget).tz('Asia/Seoul').format('MM.DD HH:mm'),
+          // 정렬을 위해 원본 날짜 객체도 임시 저장
+          rawDate: new Date(dateTarget) 
         };
       });
   
-      res.json({ success: true, winners: maskedWinners });
+      // 3. 최신순 정렬 (자바스크립트 sort 사용)
+      maskedWinners.sort((a, b) => b.rawDate - a.rawDate);
+  
+      // 4. 응답 전송 (rawDate는 제거하고 보냄)
+      res.json({ 
+        success: true, 
+        winners: maskedWinners.map(({ rawDate, ...rest }) => rest) 
+      });
   
     } catch (error) {
       console.error('당첨자 조회 오류:', error);
       res.status(500).json({ success: false, winners: [] });
     }
   });
-
 
 
 // --- 8. 서버 시작 ---
