@@ -1408,50 +1408,36 @@ app.post('/api/play-event', async (req, res) => {
       res.status(500).json({ success: false, message: '서버 오류' });
     }
   });
-// [당첨자 명단 조회 API] - 수정버전 (날짜 필드 호환성 개선)
+// [당첨자 명단 조회 API] - 마스킹 수정 (뒤 3자리 xxx), 시간 제거
 app.get('/api/event-winners', async (req, res) => {
     try {
       const collection = db.collection('event12_collection');
   
-      // 1. 날짜 제한 없이 당첨자(status: 'win') 조회
-      const winners = await collection.find({ 
-        status: 'win' 
-      })
-      .limit(50) 
-      .toArray();
+      // 1. 당첨자 조회 (최신순 50명)
+      const winners = await collection.find({ status: 'win' })
+        .sort({ updatedAt: -1 }) // 혹은 createdAt
+        .limit(50) 
+        .toArray();
   
-      // 2. 가공 및 정렬 (애플리케이션 레벨에서 처리)
+      // 2. 데이터 가공 (마스킹 변경: 뒤 3자리 -> xxx)
       const maskedWinners = winners.map(w => {
         let id = w.userId || 'guest';
         
-        // 아이디 마스킹
+        // 아이디 길이가 3자리보다 길면 뒤 3자리를 자르고 'xxx' 붙임
         if (id.length > 3) {
-          id = id.substring(0, 3) + '****';
+          id = id.slice(0, -3) + 'xxx'; 
         } else {
-          id = id + '****';
+          // 아이디가 너무 짧으면 그냥 전체+xxx (혹은 그대로)
+          id = id + 'xxx';
         }
   
-        // ★ [핵심 수정] updatedAt이 없으면 createdAt을 사용
-        const dateTarget = w.updatedAt ? w.updatedAt : w.createdAt;
-  
         return {
-          maskedId: id,
-          prize: '100원 딜',
-          // 날짜 포맷팅
-          time: moment(dateTarget).tz('Asia/Seoul').format('MM.DD HH:mm'),
-          // 정렬을 위해 원본 날짜 객체도 임시 저장
-          rawDate: new Date(dateTarget) 
+          maskedId: id
+          // time 필드는 더 이상 프론트에서 안 쓰므로 제거 (데이터 절약)
         };
       });
   
-      // 3. 최신순 정렬 (자바스크립트 sort 사용)
-      maskedWinners.sort((a, b) => b.rawDate - a.rawDate);
-  
-      // 4. 응답 전송 (rawDate는 제거하고 보냄)
-      res.json({ 
-        success: true, 
-        winners: maskedWinners.map(({ rawDate, ...rest }) => rest) 
-      });
+      res.json({ success: true, winners: maskedWinners });
   
     } catch (error) {
       console.error('당첨자 조회 오류:', error);
@@ -1459,6 +1445,7 @@ app.get('/api/event-winners', async (req, res) => {
     }
   });
 
+  
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
