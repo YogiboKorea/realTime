@@ -1353,7 +1353,7 @@ app.get('/api/event-winners', async (req, res) => {
   
       // ★ [경품 설정] DB 조회 대신 상수로 설정 (필요시 DB 로직으로 교체 가능)
       const PRIZE_COUPON_NO = "1234567890"; // 발급할 쿠폰 번호
-      const PRIZE_TARGET_URL = "/product/detail.html?product_no=123"; // 당첨 후 이동할 주소
+      const PRIZE_TARGET_URL = "/product/스퀴지보-애니멀/128/category/222/display/1/"; // 당첨 후 이동할 주소
   
       if (!userId) {
         return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
@@ -1444,7 +1444,7 @@ app.get('/api/event-winners', async (req, res) => {
     }
   });
 
-  
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
