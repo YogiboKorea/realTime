@@ -1492,7 +1492,7 @@ app.post('/api/play-event', async (req, res) => {
       let isWin = false;
       
       if (dailyWinnerCount < 10) { // 10명 제한
-        const WIN_PROBABILITY_PERCENT = 5; // 5% 확률
+        const WIN_PROBABILITY_PERCENT = 99; // 5% 확률
         if (Math.random() * 100 < WIN_PROBABILITY_PERCENT) isWin = true;
       }
   
@@ -1526,7 +1526,7 @@ app.post('/api/play-event', async (req, res) => {
       res.status(500).json({ success: false, message: '서버 오류' });
     }
   });
-  
+
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
