@@ -1446,6 +1446,87 @@ app.get('/api/event-winners', async (req, res) => {
   });
 
   
+  // [이벤트 참여 API] - 쿠폰번호 및 리다이렉트 URL 포함
+app.post('/api/play-event', async (req, res) => {
+    try {
+      const { userId, isRetry } = req.body;
+  
+      // ★ [설정] DB에서 가져올 값들 (여기서 수정하면 프론트에 자동 적용)
+      const PRIZE_COUPON_NO = "1234567890"; // 발급할 쿠폰 번호
+      const PRIZE_TARGET_URL = "/product/detail.html?product_no=123"; // 이동할 상품/이벤트 페이지 주소
+  
+      if (!userId) {
+        return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
+      }
+  
+      const now = moment().tz('Asia/Seoul');
+      const todayStr = now.format('YYYY-MM-DD');
+      const collection = db.collection('event12_collection');
+  
+      // 1. [중복 당첨 체크]
+      const existingWin = await collection.findOne({ userId: userId, status: 'win' });
+      if (existingWin) {
+        // ★ 이미 당첨된 사람은 바로 이동할 URL만 줌 (쿠폰번호 안 줌 or 구분값 전달)
+        return res.status(200).json({ 
+          success: false, 
+          code: 'ALREADY_WON', 
+          message: '이미 당첨되셨습니다. 상품 페이지로 바로 이동합니다.',
+          targetUrl: PRIZE_TARGET_URL // 바로가기 링크
+        });
+      }
+  
+      // 2. [오늘 참여 이력 체크]
+      const todayRecord = await collection.findOne({ userId: userId, date: todayStr });
+  
+      if (todayRecord) {
+        if (todayRecord.tryCount >= 2 || todayRecord.status === 'win') {
+          return res.status(200).json({ success: false, code: 'DAILY_LIMIT_EXCEEDED', message: '오늘의 기회 소진' });
+        }
+        if (!isRetry) {
+          return res.status(200).json({ success: false, code: 'RETRY_AVAILABLE', message: '공유 후 재도전 가능', tryCount: 1 });
+        }
+      }
+  
+      // 3. [당첨자 수 제한 & 확률]
+      const dailyWinnerCount = await collection.countDocuments({ date: todayStr, status: 'win' });
+      let isWin = false;
+      
+      if (dailyWinnerCount < 10) { // 10명 제한
+        const WIN_PROBABILITY_PERCENT = 5; // 5% 확률
+        if (Math.random() * 100 < WIN_PROBABILITY_PERCENT) isWin = true;
+      }
+  
+      const resultStatus = isWin ? 'win' : 'lose';
+  
+      // 4. [DB 저장]
+      if (todayRecord) {
+        await collection.updateOne(
+          { _id: todayRecord._id },
+          { $set: { status: resultStatus, updatedAt: new Date() }, $inc: { tryCount: 1 } }
+        );
+      } else {
+        await collection.insertOne({
+          userId: userId, date: todayStr, status: resultStatus, tryCount: 1, createdAt: new Date()
+        });
+      }
+  
+      // 5. [결과 응답]
+      res.status(200).json({
+        success: true,
+        code: 'RESULT',
+        isWin: isWin,
+        message: isWin ? '축하합니다! 당첨되셨습니다.' : '아쉽지만 꽝입니다.',
+        tryCount: todayRecord ? 2 : 1,
+        // ★ 당첨 시에만 쿠폰 정보와 이동 주소 전달
+        couponData: isWin ? { couponNo: PRIZE_COUPON_NO, targetUrl: PRIZE_TARGET_URL } : null
+      });
+  
+    } catch (error) {
+      console.error('이벤트 에러:', error);
+      res.status(500).json({ success: false, message: '서버 오류' });
+    }
+  });
+  
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
