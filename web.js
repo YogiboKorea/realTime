@@ -1307,95 +1307,107 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
 
 
 
-//추가 이벤트 진행하기
-// [추가 이벤트 진행하기] API 엔드포인트
-app.post('/api/add-event', async (req, res) => {
+// [이벤트 참여 API] - 1일 1회(공유시 2회), 중복 당첨 불가, 일 10명 제한
+app.post('/api/play-event', async (req, res) => {
     try {
-      // 1. 클라이언트(프론트)에서 보낸 데이터 받기
-      const { userId, eventType, extraData } = req.body;
+      const { userId, isRetry } = req.body; // isRetry: true면 재도전 시도
   
-      // 2. 유효성 검사
       if (!userId) {
-        return res.status(400).json({ success: false, message: '유저 정보가 없습니다.' });
+        return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
       }
   
-      // 3. MongoDB 저장 (기존에 연결된 전역 'db' 객체 사용)
-      // 'event_collection' 부분만 원하시는 컬렉션 이름(예: 'events', 'participants' 등)으로 바꾸시면 됩니다.
-      const collection = db.collection('event12_collection'); 
+      const now = moment().tz('Asia/Seoul');
+      const todayStr = now.format('YYYY-MM-DD');
+      const collection = db.collection('event12_collection'); // 컬렉션 이름
   
-      const insertResult = await collection.insertOne({
-        userId: userId,
-        eventType: eventType || 'default',
-        extraData: extraData || {},
-        createdAt: new Date(),
-        status: 'active'
-      });
-  
-      // 4. 성공 응답 보내기
-      if (insertResult.acknowledged) {
-        res.status(200).json({ 
-          success: true, 
-          message: '이벤트 데이터가 성공적으로 저장되었습니다.',
-          data: insertResult 
+      // 1. [평생 중복 당첨 체크] 과거에 당첨된 적이 있는지?
+      const existingWin = await collection.findOne({ userId: userId, status: 'win' });
+      if (existingWin) {
+        return res.status(200).json({ 
+          success: false, 
+          code: 'ALREADY_WON', 
+          message: '이미 당첨 내역이 있어 참여할 수 없습니다.' 
         });
-      } else {
-        throw new Error('데이터 저장 실패');
       }
+  
+      // 2. [오늘 참여 이력 체크]
+      const todayRecord = await collection.findOne({ userId: userId, date: todayStr });
+  
+      // 2-1. 오늘 이미 참여 기록이 있는 경우
+      if (todayRecord) {
+        // 이미 2번(기본+재도전) 다 했거나, 당첨된 경우 -> '닫기' 상태
+        if (todayRecord.tryCount >= 2 || todayRecord.status === 'win') {
+          return res.status(200).json({ 
+            success: false, 
+            code: 'DAILY_LIMIT_EXCEEDED', 
+            message: '오늘의 참여 기회를 모두 소진했습니다.' 
+          });
+        }
+        
+        // 기록은 있는데 '재도전(isRetry=true)' 요청이 아닌 경우 -> '공유하고 재도전하세요' 안내
+        if (!isRetry) {
+          return res.status(200).json({
+            success: false,
+            code: 'RETRY_AVAILABLE',
+            message: '이미 1회 참여하셨습니다. 공유 후 재도전하세요.',
+            tryCount: 1
+          });
+        }
+      }
+  
+      // 3. [하루 당첨자 수 제한 체크] 오늘 당첨자가 이미 10명인지?
+      const dailyWinnerCount = await collection.countDocuments({ date: todayStr, status: 'win' });
+      const MAX_DAILY_WINNERS = 10;
+      
+      // 4. [확률 돌리기]
+      let isWin = false;
+      // 10명 미만일 때만 추첨 진행
+      if (dailyWinnerCount < MAX_DAILY_WINNERS) {
+        const WIN_PROBABILITY_PERCENT = 5; // 당첨 확률 5% (조절 가능)
+        const randomVal = Math.random() * 100;
+        if (randomVal < WIN_PROBABILITY_PERCENT) {
+          isWin = true;
+        }
+      }
+  
+      const resultStatus = isWin ? 'win' : 'lose';
+      const prizeName = isWin ? '축하합니다! 당첨되셨습니다.' : '아쉽지만 꽝입니다.';
+  
+      // 5. [DB 저장/업데이트]
+      if (todayRecord) {
+        // 재도전인 경우: 업데이트 (횟수 2로 증가)
+        await collection.updateOne(
+          { _id: todayRecord._id },
+          { 
+            $set: { status: resultStatus, updatedAt: new Date() },
+            $inc: { tryCount: 1 } 
+          }
+        );
+      } else {
+        // 첫 도전인 경우: 신규 저장 (횟수 1)
+        await collection.insertOne({
+          userId: userId,
+          date: todayStr,
+          status: resultStatus,
+          tryCount: 1, 
+          createdAt: new Date()
+        });
+      }
+  
+      // 6. 결과 응답
+      res.status(200).json({
+        success: true,
+        code: 'RESULT',
+        isWin: isWin,
+        message: prizeName,
+        tryCount: todayRecord ? 2 : 1 // 현재 몇 번째 시도였는지 전달
+      });
   
     } catch (error) {
-      console.error('추가 이벤트 저장 중 오류 발생:', error);
-      res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+      console.error('이벤트 에러:', error);
+      res.status(500).json({ success: false, message: '서버 오류' });
     }
   });
-
-
-// [추가 이벤트 진행하기] API 엔드포인트
-app.post('/api/add-event', async (req, res) => {
-  try {
-    // 1. 클라이언트(프론트)에서 보낸 데이터 받기
-    // (보내는 데이터 이름에 맞춰서 변수명을 수정하세요. 예: userId, eventName 등)
-    const { userId, eventType, extraData } = req.body;
-
-    // 2. 유효성 검사 (데이터가 제대로 왔는지 확인)
-    if (!userId) {
-      return res.status(400).json({ success: false, message: '유저 정보가 없습니다.' });
-    }
-
-    // 3. MongoDB 연결 및 저장
-    // 주의: 'your_db_name'과 'event_collection'은 실제 사용하는 이름으로 변경해주세요.
-    // client 변수가 전역으로 선언되어 있어야 합니다. (만약 안 되면 req.app.locals.db 등을 활용)
-    const db = client.db('your_db_name'); 
-    const collection = db.collection('event_collection');
-
-    const insertResult = await collection.insertOne({
-      userId: userId,
-      eventType: eventType || 'default',
-      extraData: extraData || {},
-      createdAt: new Date(), // 생성 시간 자동 기록
-      status: 'active'
-    });
-
-    // 4. 성공 응답 보내기
-    if (insertResult.acknowledged) {
-      res.status(200).json({ 
-        success: true, 
-        message: '이벤트 데이터가 성공적으로 저장되었습니다.',
-        data: insertResult 
-      });
-    } else {
-      throw new Error('데이터 저장 실패');
-    }
-
-  } catch (error) {
-    console.error('추가 이벤트 저장 중 오류 발생:', error);
-    res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
-  }
-});
-
-
-
-
-
 
 
 
