@@ -1349,7 +1349,7 @@ app.get('/api/event-winners', async (req, res) => {
   
       // ★ [테스트용 설정] 배포 시 꼭 원래대로(10명, 5%) 변경하세요!
       const MAX_DAILY_WINNERS = 1000; // 테스트를 위해 넉넉하게 1000명으로 설정
-      const WIN_PROBABILITY_PERCENT = 100; // 테스트를 위해 100% 당첨으로 설정
+      const WIN_PROBABILITY_PERCENT = 3; // 테스트를 위해 100% 당첨으로 설정
   
       // ★ [경품 설정] DB 조회 대신 상수로 설정 (필요시 DB 로직으로 교체 가능)
       const PRIZE_COUPON_NO = "1234567890"; // 발급할 쿠폰 번호
