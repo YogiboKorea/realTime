@@ -1304,32 +1304,28 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
         res.status(500).json({ success: false, message: '통계 조회 실패' });
     }
 });
-
 // ==========================================
-// [이벤트 관련 API 통합 (당첨자 조회 + 이벤트 참여)]
+// [API 라우터 시작] (작성하신 코드)
 // ==========================================
 
-// 1. [당첨자 명단 조회 API] - 마스킹(뒤 3자리 xxx) 적용
+// 1. [당첨자 명단 조회 API]
 app.get('/api/event-winners', async (req, res) => {
     try {
+      // ★ db 변수가 위에서 연결된 상태여야 함
       const collection = db.collection('event12_collection');
   
-      // 최신순 50명 조회
       const winners = await collection.find({ status: 'win' })
         .sort({ updatedAt: -1 }) 
         .limit(50) 
         .toArray();
   
-      // 데이터 가공 (아이디 마스킹)
       const maskedWinners = winners.map(w => {
         let id = w.userId || 'guest';
-        
         if (id.length > 3) {
           id = id.slice(0, -3) + 'xxx'; 
         } else {
           id = id + 'xxx';
         }
-  
         return { maskedId: id };
       });
   
@@ -1339,36 +1335,34 @@ app.get('/api/event-winners', async (req, res) => {
       console.error('당첨자 조회 오류:', error);
       res.status(500).json({ success: false, winners: [] });
     }
-  });
+});
   
-  
-  // 2. [이벤트 참여 API] - 쿠폰 지급, 리다이렉트, 테스트 모드 적용
-  app.post('/api/play-event', async (req, res) => {
+// 2. [이벤트 참여 API]
+app.post('/api/play-event', async (req, res) => {
     try {
       const { userId, isRetry } = req.body; 
   
-      // ★ [테스트용 설정] 배포 시 꼭 원래대로(10명, 5%) 변경하세요!
-      const MAX_DAILY_WINNERS = 1000; // 테스트를 위해 넉넉하게 1000명으로 설정
-      const WIN_PROBABILITY_PERCENT = 3; // 테스트를 위해 100% 당첨으로 설정
+      // ★ 테스트 설정
+      const MAX_DAILY_WINNERS = 1000; 
+      const WIN_PROBABILITY_PERCENT = 3; 
   
-      // ★ [경품 설정] DB 조회 대신 상수로 설정 (필요시 DB 로직으로 교체 가능)
-      const PRIZE_COUPON_NO = "1234567890"; // 발급할 쿠폰 번호
-      const PRIZE_TARGET_URL = "/product/스퀴지보-애니멀/128/category/222/display/1/"; // 당첨 후 이동할 주소
+      const PRIZE_COUPON_NO = "1234567890";
+      const PRIZE_TARGET_URL = "/product/스퀴지보-애니멀/128/category/222/display/1/";
   
       if (!userId) {
         return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
       }
   
+      // moment-timezone 필요
       const now = moment().tz('Asia/Seoul');
       const todayStr = now.format('YYYY-MM-DD');
       const collection = db.collection('event12_collection');
   
       console.log(`[EVENT] 유저: ${userId}, 재도전: ${isRetry}`);
   
-      // (1) [평생 중복 당첨 체크]
+      // (1) 평생 중복 체크
       const existingWin = await collection.findOne({ userId: userId, status: 'win' });
       if (existingWin) {
-        console.log('-> 결과: 이미 과거에 당첨됨 (참여 불가)');
         return res.status(200).json({ 
           success: false, 
           code: 'ALREADY_WON', 
@@ -1377,43 +1371,32 @@ app.get('/api/event-winners', async (req, res) => {
         });
       }
   
-      // (2) [오늘 참여 이력 체크]
+      // (2) 오늘 참여 이력 체크
       const todayRecord = await collection.findOne({ userId: userId, date: todayStr });
       
       if (todayRecord) {
-        // 이미 2회(기본+재도전) 소진했거나, 오늘 당첨된 경우
         if (todayRecord.tryCount >= 2 || todayRecord.status === 'win') {
-          console.log('-> 결과: 오늘 기회 모두 소진');
           return res.status(200).json({ success: false, code: 'DAILY_LIMIT_EXCEEDED', message: '오늘의 기회 소진' });
         }
-        // 1회차 꽝이고, 재도전 요청이 아닌 경우 (새로고침 등)
         if (!isRetry) {
-          console.log('-> 결과: 재도전 필요');
           return res.status(200).json({ success: false, code: 'RETRY_AVAILABLE', message: '공유 후 재도전 가능', tryCount: 1 });
         }
       }
   
-      // (3) [당첨 여부 결정]
+      // (3) 당첨 여부 결정
       const dailyWinnerCount = await collection.countDocuments({ date: todayStr, status: 'win' });
-      console.log(`-> 오늘 당첨자 수: ${dailyWinnerCount}명 / 제한: ${MAX_DAILY_WINNERS}명`);
-  
-      let isWin = false;
       
-      // 제한 인원 미만일 때만 확률 돌림
+      let isWin = false;
       if (dailyWinnerCount < MAX_DAILY_WINNERS) { 
-         const randomVal = Math.random() * 100;
-         console.log(`-> 추첨: 랜덤값 ${randomVal.toFixed(2)} < 확률 ${WIN_PROBABILITY_PERCENT}`);
-         
-         if (randomVal < WIN_PROBABILITY_PERCENT) {
-           isWin = true;
-         }
-      } else {
-          console.log('-> 결과: 선착순 마감됨');
+          const randomVal = Math.random() * 100;
+          if (randomVal < WIN_PROBABILITY_PERCENT) {
+            isWin = true;
+          }
       }
   
       const resultStatus = isWin ? 'win' : 'lose';
   
-      // (4) [DB 저장 및 업데이트]
+      // (4) DB 업데이트/저장
       if (todayRecord) {
         await collection.updateOne(
           { _id: todayRecord._id },
@@ -1425,16 +1408,13 @@ app.get('/api/event-winners', async (req, res) => {
         });
       }
   
-      console.log(`-> 최종 결과: ${isWin ? '당첨' : '꽝'}`);
-  
-      // (5) [응답 전송]
+      // (5) 응답
       res.status(200).json({
         success: true,
         code: 'RESULT',
         isWin: isWin,
         message: isWin ? '축하합니다! 당첨되셨습니다.' : '아쉽지만 꽝입니다.',
         tryCount: todayRecord ? 2 : 1,
-        // 당첨 시에만 쿠폰 정보 전달
         couponData: isWin ? { couponNo: PRIZE_COUPON_NO, targetUrl: PRIZE_TARGET_URL } : null
       });
   
@@ -1442,7 +1422,23 @@ app.get('/api/event-winners', async (req, res) => {
       console.error('이벤트 에러:', error);
       res.status(500).json({ success: false, message: '서버 오류' });
     }
-  });
+});
+
+// 3. [카카오 키 조회 API] (추가된 부분)
+app.get('/api/kakao-key', (req, res) => {
+    // .env 파일의 KAKAO_JS_KEY를 읽어서 반환
+    const key = process.env.KAKAO_JS_KEY;
+    
+    if (!key) {
+        console.error("❌ 서버 경고: .env 파일에 KAKAO_JS_KEY가 없습니다.");
+    }
+
+    res.json({
+        success: true,
+        key: key 
+    });
+});
+
 
 
 // --- 8. 서버 시작 ---
