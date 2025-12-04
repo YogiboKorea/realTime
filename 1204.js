@@ -1307,90 +1307,10 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
 
 
 
-//추가 이벤트 진행하기
-// [추가 이벤트 진행하기] API 엔드포인트
-app.post('/api/add-event', async (req, res) => {
-    try {
-      // 1. 클라이언트(프론트)에서 보낸 데이터 받기
-      const { userId, eventType, extraData } = req.body;
-  
-      // 2. 유효성 검사
-      if (!userId) {
-        return res.status(400).json({ success: false, message: '유저 정보가 없습니다.' });
-      }
-  
-      // 3. MongoDB 저장 (기존에 연결된 전역 'db' 객체 사용)
-      // 'event_collection' 부분만 원하시는 컬렉션 이름(예: 'events', 'participants' 등)으로 바꾸시면 됩니다.
-      const collection = db.collection('event12_collection'); 
-  
-      const insertResult = await collection.insertOne({
-        userId: userId,
-        eventType: eventType || 'default',
-        extraData: extraData || {},
-        createdAt: new Date(),
-        status: 'active'
-      });
-  
-      // 4. 성공 응답 보내기
-      if (insertResult.acknowledged) {
-        res.status(200).json({ 
-          success: true, 
-          message: '이벤트 데이터가 성공적으로 저장되었습니다.',
-          data: insertResult 
-        });
-      } else {
-        throw new Error('데이터 저장 실패');
-      }
-  
-    } catch (error) {
-      console.error('추가 이벤트 저장 중 오류 발생:', error);
-      res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
-    }
-  });
+//여기에 새롭게 이벤트 추가하기
 
 
-// [추가 이벤트 진행하기] API 엔드포인트
-app.post('/api/add-event', async (req, res) => {
-  try {
-    // 1. 클라이언트(프론트)에서 보낸 데이터 받기
-    // (보내는 데이터 이름에 맞춰서 변수명을 수정하세요. 예: userId, eventName 등)
-    const { userId, eventType, extraData } = req.body;
 
-    // 2. 유효성 검사 (데이터가 제대로 왔는지 확인)
-    if (!userId) {
-      return res.status(400).json({ success: false, message: '유저 정보가 없습니다.' });
-    }
-
-    // 3. MongoDB 연결 및 저장
-    // 주의: 'your_db_name'과 'event_collection'은 실제 사용하는 이름으로 변경해주세요.
-    // client 변수가 전역으로 선언되어 있어야 합니다. (만약 안 되면 req.app.locals.db 등을 활용)
-    const db = client.db('your_db_name'); 
-    const collection = db.collection('event_collection');
-
-    const insertResult = await collection.insertOne({
-      userId: userId,
-      eventType: eventType || 'default',
-      extraData: extraData || {},
-      createdAt: new Date(), // 생성 시간 자동 기록
-      status: 'active'
-    });
-
-    // 4. 성공 응답 보내기
-    if (insertResult.acknowledged) {
-      res.status(200).json({ 
-        success: true, 
-        message: '이벤트 데이터가 성공적으로 저장되었습니다.',
-        data: insertResult 
-      });
-    } else {
-      throw new Error('데이터 저장 실패');
-    }
-
-  } catch (error) {
-    console.error('추가 이벤트 저장 중 오류 발생:', error);
-    res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
-  }
-});
 
 
 
