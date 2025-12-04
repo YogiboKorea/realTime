@@ -1410,7 +1410,46 @@ app.post('/api/play-event', async (req, res) => {
   });
 
 
-
+// [당첨자 명단 조회 API] - 날짜 제한 없이 최근 당첨자 조회
+app.get('/api/event-winners', async (req, res) => {
+    try {
+      const collection = db.collection('event12_collection');
+  
+      // 1. 날짜 제한 없이(status: 'win') 당첨자 조회
+      // 최신순(updatedAt: -1)으로 정렬하여 최근 50명만 가져옴
+      const winners = await collection.find({ 
+        status: 'win' 
+      })
+      .sort({ updatedAt: -1 }) 
+      .limit(50) // 너무 많아지면 로딩 느려지니 최근 50명까지만
+      .toArray();
+  
+      // 2. 아이디 마스킹 및 날짜 포맷팅
+      const maskedWinners = winners.map(w => {
+        let id = w.userId || 'guest';
+        
+        // 아이디 마스킹 (앞 3자리 + ****)
+        if (id.length > 3) {
+          id = id.substring(0, 3) + '****';
+        } else {
+          id = id + '****';
+        }
+  
+        return {
+          maskedId: id,
+          prize: '100원 딜', // 혹은 w.result 값 사용
+          // ★수정됨: 날짜 구분을 위해 '월.일 시:분' 형식으로 변경 (예: 12.05 14:30)
+          time: moment(w.updatedAt).tz('Asia/Seoul').format('MM.DD HH:mm') 
+        };
+      });
+  
+      res.json({ success: true, winners: maskedWinners });
+  
+    } catch (error) {
+      console.error('당첨자 조회 오류:', error);
+      res.status(500).json({ success: false, winners: [] });
+    }
+  });
 
 
 
