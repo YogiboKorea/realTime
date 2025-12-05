@@ -971,6 +971,75 @@ app.get('/api/clean-bots', async (req, res) => {
 // [통합] 오프라인 좌수왕(C) + 매니저 관리(D) 시스템
 // ==========================================
 
+const adminCollectionName = 'admin_managers'; // 관리자가 수동 등록한 매니저 목록
+
+// 1. [GET] 등록된 매니저 목록 조회
+app.get('/api/jwasu/admin/managers', async (req, res) => {
+    try {
+        const collection = db.collection(adminCollectionName);
+        // 최신순 정렬
+        const managers = await collection.find({}).sort({ createdAt: -1 }).toArray();
+
+        res.json({ success: true, managers: managers });
+    } catch (error) {
+        console.error('관리자 목록 조회 오류:', error);
+        res.status(500).json({ success: false, message: '목록을 불러오지 못했습니다.' });
+    }
+});
+
+// 2. [POST] 신규 매니저 수동 등록
+app.post('/api/jwasu/admin/manager', async (req, res) => {
+    try {
+        const { storeName, managerName } = req.body;
+
+        if (!storeName || !managerName) {
+            return res.status(400).json({ success: false, message: '매장명과 매니저 이름은 필수입니다.' });
+        }
+
+        const collection = db.collection(adminCollectionName);
+
+        // 중복 확인 (같은 매장에 같은 이름이 있는지)
+        const exists = await collection.findOne({ storeName, managerName });
+        if (exists) {
+            return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
+        }
+
+        // 저장
+        await collection.insertOne({
+            storeName,
+            managerName,
+            createdAt: new Date()
+        });
+
+        res.json({ success: true, message: '매니저가 등록되었습니다.' });
+
+    } catch (error) {
+        console.error('매니저 등록 오류:', error);
+        res.status(500).json({ success: false, message: '등록 중 오류가 발생했습니다.' });
+    }
+});
+
+// 3. [DELETE] 매니저 삭제
+app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const collection = db.collection(adminCollectionName);
+
+        // _id를 사용하여 삭제
+        const result = await collection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 1) {
+            res.json({ success: true, message: '삭제되었습니다.' });
+        } else {
+            res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
+        }
+
+    } catch (error) {
+        console.error('삭제 오류:', error);
+        res.status(500).json({ success: false, message: '삭제 처리 중 오류 발생' });
+    }
+});
+
 // [1] 전역 변수 및 설정 (이 부분들이 맨 위에 있어야 에러가 안 납니다)
 const jwasuCollectionName = 'offline_jwasu';   // 좌수 데이터 컬렉션
 const managerCollectionName = 'managers';      // 매니저 데이터 컬렉션
