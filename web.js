@@ -1363,6 +1363,40 @@ app.post('/api/managers', async (req, res) => {
 });
 
 
+// ==========================================
+// [추가] 링크 ID로 매장 정보 찾기 (암호화된 URL 해석용)
+// ==========================================
+app.get('/api/jwasu/link/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const collection = db.collection(adminCollectionName); // admin_managers 컬렉션
+
+        // ID로 DB에서 검색
+        const info = await collection.findOne({ _id: new ObjectId(id) });
+
+        if (info) {
+            res.json({ 
+                success: true, 
+                storeName: info.storeName, 
+                managerName: info.managerName 
+            });
+        } else {
+            res.status(404).json({ success: false, message: '유효하지 않은 링크입니다.' });
+        }
+
+    } catch (error) {
+        console.error('링크 조회 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류' });
+    }
+});
+
+
+
+
+
+
+
+
 
 // ==========================================
 // [API 라우터 시작] (작성하신 코드)
