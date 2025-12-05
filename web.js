@@ -973,7 +973,7 @@ app.get('/api/clean-bots', async (req, res) => {
 // ==========================================
 
 const managerCollectionName = 'managers'; // 매니저 데이터 컬렉션
-
+const jwasuCollectionName = 'offline_jwasu'; // 이 줄이 꼭 필요합니다!
 // 1. [GET] 매니저 정보 조회 API
 // 아까 404 에러가 떴던 그 주소(/api/managers 또는 /managers)에 대응합니다.
 // 보통 프론트엔드에서 현재 접속한 몰 아이디로 정보를 요청할 때 쓰입니다.
