@@ -1494,7 +1494,7 @@ app.post('/api/raffle/entry', async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: `성공적으로 응모되었습니다! [${optionName}]`,
+            message: `이벤트 응모가 완료되었습니다. [${optionName}]`,
             entryId: result.insertedId,
         });
 
@@ -1597,6 +1597,22 @@ app.get('/api/12', async (req, res) => {
     } catch (err) {
         console.error('이벤트 응모 엑셀 생성 오류:', err);
         res.status(500).json({ success: false, message: '엑셀 파일 생성 오류' });
+    }
+});
+
+// [추가] 총 응모자 수 조회 API
+app.get('/api/raffle/total-count', async (req, res) => {
+    try {
+        const collection = db.collection(EVENT_COLLECTION_NAME); // event_raffle_entries
+        
+        // MongoDB의 countDocuments 메서드를 사용하여 총 응모자 수 계산
+        const totalCount = await collection.countDocuments({});
+
+        res.json({ success: true, totalCount: totalCount });
+
+    } catch (error) {
+        console.error('총 응모자 수 조회 오류:', error);
+        res.status(500).json({ success: false, totalCount: 0, message: '서버 오류' });
     }
 });
 
