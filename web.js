@@ -1634,7 +1634,7 @@ app.get('/api/raffle/total-count', async (req, res) => {
         // 모든 옵션을 포함하도록 기본값 0 설정 (응모 기록이 없어도 표시되도록)
         const ALL_OPTIONS = [
             "이북리더기 - 마크 7",
-            "GAL 메가 문필로우",
+            "메가 문필로우",
             "웨이브 12개월 Basic 구독권"
         ];
         
