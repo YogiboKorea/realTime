@@ -968,11 +968,6 @@ app.get('/api/clean-bots', async (req, res) => {
 });
 
 
-// ==========================================
-// [필수 모듈 로드] - 파일 가장 맨 위에 있어야 합니다.
-// ==========================================
-const { ObjectId } = require('mongodb'); // 삭제 기능 사용 시 필수!
-const moment = require('moment-timezone'); // 날짜 계산용
 
 // ==========================================
 // [전역 변수 설정] - API 코드보다 위에 있어야 에러가 안 납니다.
@@ -1366,7 +1361,6 @@ app.post('/api/managers', async (req, res) => {
         res.status(500).json({ success: false, message: '매니저 저장 실패' });
     }
 });
-
 
 
 
