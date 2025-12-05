@@ -1601,21 +1601,55 @@ app.get('/api/12', async (req, res) => {
 });
 
 // [추가] 총 응모자 수 조회 API
+// [수정] 옵션별 응모자 수 조회 API
 app.get('/api/raffle/total-count', async (req, res) => {
     try {
         const collection = db.collection(EVENT_COLLECTION_NAME); // event_raffle_entries
-        
-        // MongoDB의 countDocuments 메서드를 사용하여 총 응모자 수 계산
-        const totalCount = await collection.countDocuments({});
 
-        res.json({ success: true, totalCount: totalCount });
+        // MongoDB Aggregation Pipeline을 사용하여 옵션별 count를 집계
+        const pipeline = [
+            {
+                $group: {
+                    _id: "$optionName", // optionName 기준으로 그룹화
+                    count: { $sum: 1 }   // 각 그룹의 문서 수 카운트
+                }
+            },
+            {
+                $project: {
+                    _id: 0, // _id 필드는 제외
+                    optionName: "$_id",
+                    count: 1
+                }
+            }
+        ];
+
+        const results = await collection.aggregate(pipeline).toArray();
+
+        // 결과를 프론트엔드가 사용하기 쉬운 Map 형태로 변환
+        const totalCounts = results.reduce((acc, item) => {
+            acc[item.optionName] = item.count;
+            return acc;
+        }, {});
+        
+        // 모든 옵션을 포함하도록 기본값 0 설정 (응모 기록이 없어도 표시되도록)
+        const ALL_OPTIONS = [
+            "이북리더기 - 마크 7",
+            "GAL 메가 문필로우",
+            "웨이브 12개월 Basic 구독권"
+        ];
+        
+        const finalCounts = {};
+        ALL_OPTIONS.forEach(option => {
+            finalCounts[option] = totalCounts[option] || 0;
+        });
+
+        res.json({ success: true, counts: finalCounts });
 
     } catch (error) {
-        console.error('총 응모자 수 조회 오류:', error);
-        res.status(500).json({ success: false, totalCount: 0, message: '서버 오류' });
+        console.error('옵션별 응모자 수 조회 오류:', error);
+        res.status(500).json({ success: false, counts: {}, message: '서버 오류' });
     }
 });
-
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
