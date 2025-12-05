@@ -1285,7 +1285,7 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 상세 집계표 조회
+// 5. [GET] 상세 집계표 조회 (다중 매장 선택 지원 수정됨)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1294,8 +1294,13 @@ app.get('/api/jwasu/table', async (req, res) => {
             date: { $gte: startDate, $lte: endDate }
         };
 
+        // [수정] 다중 선택 처리 로직
         if (store && store !== 'all') {
-            query.storeName = store;
+            // 콤마(,)로 구분된 문자열을 배열로 변환 (예: "매장A,매장B" -> ["매장A", "매장B"])
+            const storeList = store.split(',');
+            
+            // MongoDB $in 연산자를 사용하여 배열에 포함된 매장만 검색
+            query.storeName = { $in: storeList };
         }
 
         const collection = db.collection(jwasuCollectionName);
