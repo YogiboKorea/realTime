@@ -968,93 +968,79 @@ app.get('/api/clean-bots', async (req, res) => {
 });
 
 
-
 // ==========================================
-// [섹션 C] 오프라인 좌수왕(Seat Count) 시스템 (최종 정제버전)
+// [섹션 D] 매니저(쇼핑몰) 관리 시스템 (추가본)
 // ==========================================
 
-// [중요] ObjectId 충돌 방지를 위해 이 섹션에서는 전역 ObjectId를 사용하지 않거나,
-// 필요하다면 db 객체나 mongodb 라이브러리에서 직접 꺼내 씁니다.
-// 예: const { ObjectId } = require('mongodb'); 코드가 상단에 한 번만 있어야 합니다.
+const managerCollectionName = 'managers'; // 매니저 데이터 컬렉션
 
-const jwasuCollectionName = 'offline_jwasu'; // 좌수 데이터 컬렉션
-
-// 1. 관리 대상 매장 리스트
-const OFFLINE_STORES = [
-    "롯데안산",
-    "롯데동탄",
-    "롯데대구",
-    "신세계센텀시티몰",
-    "스타필드고양",
-    "스타필드하남",
-    "현대미아",
-    "현대울산"
-];
-
-// 2. [POST] 좌수 카운트 증가 API
-app.post('/api/jwasu/increment', async (req, res) => {
+// 1. [GET] 매니저 정보 조회 API
+// 아까 404 에러가 떴던 그 주소(/api/managers 또는 /managers)에 대응합니다.
+// 보통 프론트엔드에서 현재 접속한 몰 아이디로 정보를 요청할 때 쓰입니다.
+app.get('/api/managers', async (req, res) => {
     try {
-        const { storeName } = req.body;
+        const { mall_id } = req.query; // 쿼리로 mall_id를 받는다고 가정
 
-        if (!OFFLINE_STORES.includes(storeName)) {
-            return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
+        const collection = db.collection(managerCollectionName);
+        
+        // mall_id가 있으면 특정 매니저 검색, 없으면 전체 검색 (상황에 따라 다름)
+        const query = mall_id ? { mall_id: mall_id } : {};
+        
+        const managers = await collection.find(query).toArray();
+
+        res.json({
+            success: true,
+            managers: managers
+        });
+
+    } catch (error) {
+        console.error('매니저 조회 오류:', error);
+        res.status(500).json({ success: false, message: '매니저 정보 조회 실패' });
+    }
+});
+
+// 2. [POST] 매니저(쇼핑몰) 정보 저장/설치 API
+// 앱 설치 시점이나, 최초 설정 시 호출되어 DB에 저장하는 역할입니다.
+app.post('/api/managers', async (req, res) => {
+    try {
+        // 프론트에서 보내주는 정보 (몰ID, 도메인 등)
+        const { mall_id, shop_url, client_id } = req.body; 
+
+        if (!mall_id) {
+            return res.status(400).json({ success: false, message: 'mall_id는 필수입니다.' });
         }
 
-        // 날짜 계산
-        const now = moment().tz('Asia/Seoul');
-        const todayStr = now.format('YYYY-MM-DD');
-        const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
+        const collection = db.collection(managerCollectionName);
 
-        const collection = db.collection(jwasuCollectionName);
-
-        // 1. 오늘 날짜 카운트 증가
+        // 이미 존재하는지 확인 후 업데이트(upsert)
         const result = await collection.findOneAndUpdate(
-            { date: todayStr, storeName: storeName },
+            { mall_id: mall_id },
             { 
-                $inc: { count: 1 }, 
-                $set: { lastUpdated: new Date() },
-                $setOnInsert: { createdAt: new Date() }
+                $set: { 
+                    mall_id: mall_id,
+                    shop_url: shop_url || '', // URL 정보 저장
+                    client_id: client_id || '',
+                    lastUpdated: new Date()
+                },
+                $setOnInsert: { 
+                    createdAt: new Date(),
+                    status: 'active' // 활성 상태 표시
+                }
             },
             { upsert: true, returnDocument: 'after' }
         );
 
-        // [수정 포인트] MongoDB 드라이버 버전에 따라 리턴 구조가 다름을 방어하는 코드
-        // result.value가 있으면(구버전) 쓰고, 없으면 result 자체(신버전)를 씁니다.
-        const updatedDoc = result.value || result; 
-        const todayCount = updatedDoc.count;
+        const savedManager = result.value || result;
 
-        // 2. 이번 달 전체 누적 합계 계산
-        const pipeline = [
-            { 
-                $match: { 
-                    storeName: storeName,
-                    date: { $gte: startOfMonth, $lte: todayStr }
-                } 
-            },
-            { 
-                $group: { 
-                    _id: null, 
-                    total: { $sum: "$count" }
-                } 
-            }
-        ];
-        
-        const aggResult = await collection.aggregate(pipeline).toArray();
-        const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : todayCount;
-
-        // 3. 두 가지 값 모두 반환
-        res.json({ 
-            success: true, 
-            storeName: storeName, 
-            todayCount: todayCount,    // 오늘 누적
-            monthlyTotal: monthlyTotal // 이번달 총합
+        res.json({
+            success: true,
+            message: '매니저 정보가 저장되었습니다.',
+            data: savedManager
         });
 
     } catch (error) {
-        console.error('좌수 증가 오류:', error);
-        // 에러 상세 내용을 로그로 확인하기 위해 error 객체 출력
-        console.log(error); 
-        res.status(500).json({ success: false, message: '카운트 처리 중 오류 발생' });
+        console.error('매니저 저장 오류:', error);
+        res.status(500).json({ success: false, message: '매니저 저장 실패' });
     }
 });
 
