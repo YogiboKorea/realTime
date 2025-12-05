@@ -969,7 +969,6 @@ app.get('/api/clean-bots', async (req, res) => {
 
 
 
-
 // ==========================================
 // [전역 변수 설정] - API 코드보다 위에 있어야 에러가 안 납니다.
 // ==========================================
@@ -1035,19 +1034,40 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
         res.status(500).json({ success: false, message: '등록 중 오류가 발생했습니다.' });
     }
 });
-
-// 3. [DELETE] 매니저(링크) 삭제
+// 3. [DELETE] 매니저(링크) 삭제 + 해당 매니저의 모든 기록 삭제
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const collection = db.collection(adminCollectionName);
+        const adminCollection = db.collection(adminCollectionName); // 링크 관리 DB
+        const dataCollection = db.collection(jwasuCollectionName);  // 좌수 기록 DB
 
-        const result = await collection.deleteOne({ _id: new ObjectId(id) });
+        // 1. 삭제하기 전에 매니저 정보(매장명, 이름)를 먼저 찾습니다.
+        const targetManager = await adminCollection.findOne({ _id: new ObjectId(id) });
 
-        if (result.deletedCount === 1) {
-            res.json({ success: true, message: '삭제되었습니다.' });
+        if (!targetManager) {
+            return res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
+        }
+
+        // 2. 해당 매니저가 기록한 모든 좌수 데이터 삭제 (deleteMany)
+        // 주의: 동명이인 방지 로직이 등록 시점에 있으므로, 이 조합으로 지우면 안전합니다.
+        const deleteDataResult = await dataCollection.deleteMany({
+            storeName: targetManager.storeName,
+            managerName: targetManager.managerName
+        });
+
+        // 3. 관리자 목록(링크)에서 삭제
+        const deleteLinkResult = await adminCollection.deleteOne({ _id: new ObjectId(id) });
+
+        console.log(`매니저 삭제됨: ${targetManager.storeName} ${targetManager.managerName}`);
+        console.log(`ㄴ 관련 기록 삭제: ${deleteDataResult.deletedCount}건`);
+
+        if (deleteLinkResult.deletedCount === 1) {
+            res.json({ 
+                success: true, 
+                message: `매니저와 관련된 기록 ${deleteDataResult.deletedCount}건이 모두 삭제되었습니다.` 
+            });
         } else {
-            res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
+            res.status(404).json({ success: false, message: '링크 삭제 중 문제가 발생했습니다.' });
         }
 
     } catch (error) {
