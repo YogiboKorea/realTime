@@ -1554,12 +1554,9 @@ app.get('/api/12', async (req, res) => {
 
         // 3. 컬럼 정의
         worksheet.columns = [
-            { header: 'No.', key: 'index', width: 10 },
-            { header: '응모 ID (DB)', key: '_id', width: 30 },
             { header: '회원 ID', key: 'userId', width: 25 },
             { header: '응모 날짜', key: 'entryDate', width: 15 },
             { header: '선택 옵션', key: 'optionName', width: 40 },
-            { header: '기록 시각', key: 'createdAt', width: 30 },
         ];
 
         // 4. 데이터 추가
