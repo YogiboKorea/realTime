@@ -1439,7 +1439,166 @@ app.get('/api/kakao-key', (req, res) => {
     });
 });
 
+//응모하기 이벤트 12월05일
 
+// --- [섹션 D] 이벤트 응모 API (단일 참여 제한) ---
+const EVENT_COLLECTION_NAME = 'event_raffle_entries'; 
+const EVENT_PERIOD_START = '2025-12-01'; // 이벤트 시작일 설정
+const EVENT_PERIOD_END = '2025-12-28'; // 이벤트 종료일 설정
+
+// 응모 API
+app.post('/api/raffle/entry', async (req, res) => {
+    try {
+        const { userId, optionName } = req.body;
+        
+        // 1. 필수값 체크 및 회원 여부 확인
+        if (!userId || userId === 'GUEST') {
+            return res.status(401).json({ success: false, message: '회원 로그인 후 참여 가능합니다.' });
+        }
+        if (!optionName) {
+            return res.status(400).json({ success: false, message: '옵션(경품)을 선택해주세요.' });
+        }
+
+        const now = moment().tz('Asia/Seoul');
+        const todayStr = now.format('YYYY-MM-DD');
+
+        // 2. 이벤트 기간 확인
+        if (todayStr < EVENT_PERIOD_START || todayStr > EVENT_PERIOD_END) {
+             return res.status(403).json({ success: false, message: '이벤트 기간이 아닙니다.' });
+        }
+
+        const collection = db.collection(EVENT_COLLECTION_NAME);
+
+        // 3. 참여 기록 확인 (유저의 모든 옵션에 대한 참여 기록)
+        // userId가 일치하는 문서가 하나라도 있으면 참여한 것으로 간주
+        const existingEntry = await collection.findOne({ userId: userId });
+
+        if (existingEntry) {
+            // 다른 옵션 포함하여 이미 참여한 경우
+            return res.status(200).json({ 
+                success: false, 
+                code: 'ALREADY_ENTERED', 
+                message: `이미 ${existingEntry.optionName} 옵션으로 응모하셨습니다. (1회 제한)` 
+            });
+        }
+
+        // 4. 응모 기록 저장 (1회만 허용되므로 새로운 레코드 삽입)
+        const newEntry = {
+            userId: userId,
+            optionName: optionName,
+            entryDate: todayStr,
+            createdAt: new Date(),
+        };
+
+        const result = await collection.insertOne(newEntry);
+
+        res.status(200).json({
+            success: true,
+            message: `성공적으로 응모되었습니다! [${optionName}]`,
+            entryId: result.insertedId,
+        });
+
+    } catch (error) {
+        console.error('이벤트 응모 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류: 응모 처리 중 문제가 발생했습니다.' });
+    }
+});
+
+// 응모 현황 조회 API (선택)
+app.get('/api/raffle/status', async (req, res) => {
+    try {
+        const { userId } = req.query;
+
+        if (!userId || userId === 'GUEST') {
+            return res.status(401).json({ success: false, isEntered: false, message: '로그인이 필요합니다.' });
+        }
+
+        const collection = db.collection(EVENT_COLLECTION_NAME);
+        const existingEntry = await collection.findOne({ userId: userId });
+        
+        if (existingEntry) {
+            return res.json({ 
+                success: true, 
+                isEntered: true, 
+                optionName: existingEntry.optionName,
+                message: `이미 [${existingEntry.optionName}]으로 응모하셨습니다.`
+            });
+        } else {
+             return res.json({ success: true, isEntered: false, message: '응모 가능합니다.' });
+        }
+
+    } catch (error) {
+        console.error('응모 상태 조회 오류:', error);
+        res.status(500).json({ success: false, isEntered: false, message: '서버 오류' });
+    }
+});
+
+
+// [추가] 이벤트 응모 기록 엑셀 다운로드 API
+app.get('/api/12', async (req, res) => {
+    try {
+        const collection = db.collection(EVENT_COLLECTION_NAME); // event_raffle_entries
+
+        // 1. 모든 응모 기록을 최신순으로 조회
+        const entries = await collection.find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        if (!entries.length) {
+            return res.status(404).json({ success: false, message: '다운로드할 이벤트 응모 데이터가 없습니다.' });
+        }
+
+        // 2. Excel Workbook 및 Worksheet 생성
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('EventEntries');
+
+        // 3. 컬럼 정의
+        worksheet.columns = [
+            { header: 'No.', key: 'index', width: 10 },
+            { header: '응모 ID (DB)', key: '_id', width: 30 },
+            { header: '회원 ID', key: 'userId', width: 25 },
+            { header: '응모 날짜', key: 'entryDate', width: 15 },
+            { header: '선택 옵션', key: 'optionName', width: 40 },
+            { header: '기록 시각', key: 'createdAt', width: 30 },
+        ];
+
+        // 4. 데이터 추가
+        entries.forEach((entry, index) => {
+            worksheet.addRow({
+                index: index + 1,
+                _id: entry._id.toString(),
+                userId: entry.userId || 'N/A',
+                entryDate: entry.entryDate || 'N/A',
+                optionName: entry.optionName || 'N/A',
+                createdAt: entry.createdAt ? moment(entry.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD HH:mm:ss') : 'N/A',
+            });
+        });
+
+        // 5. 파일 생성 및 다운로드
+        const filename = `event_raffle_entries_${moment().tz('Asia/Seoul').format('YYYYMMDD_HHmmss')}.xlsx`;
+        const filePath = path.join(__dirname, filename);
+        
+        // 파일을 서버 로컬에 쓰고
+        await workbook.xlsx.writeFile(filePath);
+
+        // 클라이언트에게 다운로드 요청
+        res.download(filePath, filename, (err) => {
+            if (err) {
+                console.error('엑셀 파일 다운로드 오류:', err);
+            }
+            // 다운로드 완료 후 파일 삭제 (선택적)
+            try {
+                fs.unlinkSync(filePath); 
+            } catch (e) {
+                console.error('엑셀 파일 삭제 오류:', e);
+            }
+        });
+
+    } catch (err) {
+        console.error('이벤트 응모 엑셀 생성 오류:', err);
+        res.status(500).json({ success: false, message: '엑셀 파일 생성 오류' });
+    }
+});
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
