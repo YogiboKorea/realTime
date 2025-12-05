@@ -1057,14 +1057,20 @@ app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
 });
 
 
+
+
 // ==========================================
-// [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
+// [섹션 C] 오프라인 좌수왕 API (매니저 구분 버전)
 // ==========================================
 
-// 1. [POST] 좌수 카운트 증가
+// 1. [POST] 좌수 카운트 증가 (매니저 정보 포함)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
-        const { storeName } = req.body;
+        // [수정] managerName 추가 수신
+        const { storeName, managerName } = req.body; 
+
+        // 매니저 이름이 없으면 '미지정' 처리 (기존 데이터 호환성)
+        const mgrName = managerName || '미지정';
 
         if (!OFFLINE_STORES.includes(storeName)) {
             return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
@@ -1076,8 +1082,9 @@ app.post('/api/jwasu/increment', async (req, res) => {
 
         const collection = db.collection(jwasuCollectionName);
 
+        // 1. 오늘 날짜 + 매장 + 매니저 조합으로 카운트 증가
         const result = await collection.findOneAndUpdate(
-            { date: todayStr, storeName: storeName },
+            { date: todayStr, storeName: storeName, managerName: mgrName },
             { 
                 $inc: { count: 1 }, 
                 $set: { lastUpdated: new Date() },
@@ -1089,10 +1096,12 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const updatedDoc = result.value || result; 
         const todayCount = updatedDoc.count;
 
+        // 2. 이번 달 누적 합계 (매장+매니저 기준)
         const pipeline = [
             { 
                 $match: { 
                     storeName: storeName,
+                    managerName: mgrName,
                     date: { $gte: startOfMonth, $lte: todayStr }
                 } 
             },
@@ -1107,6 +1116,7 @@ app.post('/api/jwasu/increment', async (req, res) => {
         res.json({ 
             success: true, 
             storeName: storeName, 
+            managerName: mgrName,
             todayCount: todayCount,
             monthlyTotal: monthlyTotal 
         });
@@ -1120,7 +1130,8 @@ app.post('/api/jwasu/increment', async (req, res) => {
 // 2. [POST] 좌수 카운트 취소 (Undo)
 app.post('/api/jwasu/undo', async (req, res) => {
     try {
-        const { storeName } = req.body;
+        const { storeName, managerName } = req.body;
+        const mgrName = managerName || '미지정';
 
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
@@ -1128,14 +1139,15 @@ app.post('/api/jwasu/undo', async (req, res) => {
 
         const collection = db.collection(jwasuCollectionName);
 
-        const currentDoc = await collection.findOne({ date: todayStr, storeName: storeName });
+        // 매장 + 매니저 조건으로 검색
+        const currentDoc = await collection.findOne({ date: todayStr, storeName: storeName, managerName: mgrName });
 
         if (!currentDoc || currentDoc.count <= 0) {
             return res.status(400).json({ success: false, message: '취소할 내역이 없습니다.' });
         }
 
         const result = await collection.findOneAndUpdate(
-            { date: todayStr, storeName: storeName },
+            { date: todayStr, storeName: storeName, managerName: mgrName },
             { 
                 $inc: { count: -1 }, 
                 $set: { lastUpdated: new Date() } 
@@ -1144,7 +1156,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
         );
 
         const pipeline = [
-            { $match: { storeName: storeName, date: { $gte: startOfMonth, $lte: todayStr } } },
+            { $match: { storeName: storeName, managerName: mgrName, date: { $gte: startOfMonth, $lte: todayStr } } },
             { $group: { _id: null, total: { $sum: "$count" } } }
         ];
         
@@ -1156,6 +1168,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.json({ 
             success: true, 
             storeName: storeName, 
+            managerName: mgrName,
             todayCount: updatedDoc ? updatedDoc.count : 0, 
             monthlyTotal: monthlyTotal 
         });
@@ -1166,7 +1179,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회
+// 3. [GET] 대시보드 데이터 조회 (매장+매니저 별 랭킹)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
@@ -1175,31 +1188,35 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
 
         const collection = db.collection(jwasuCollectionName);
 
+        // 기간 내 모든 데이터 조회
         const records = await collection.find({ 
-            date: { 
-                $gte: targetStartDate, 
-                $lte: targetEndDate 
-            } 
+            date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
-        const storeAggregates = {};
+        // [수정] 그룹화 키를 "매장명_매니저명"으로 설정
+        const aggregates = {};
+        
         records.forEach(record => {
-            if (!storeAggregates[record.storeName]) {
-                storeAggregates[record.storeName] = 0;
+            const mgr = record.managerName || '미지정';
+            const key = `${record.storeName}_${mgr}`; // 고유 키 생성
+
+            if (!aggregates[key]) {
+                aggregates[key] = {
+                    storeName: record.storeName,
+                    managerName: mgr,
+                    count: 0
+                };
             }
-            storeAggregates[record.storeName] += record.count;
+            aggregates[key].count += record.count;
         });
 
-        // 상단에 선언된 OFFLINE_STORES 사용
-        const dashboardData = OFFLINE_STORES.map(store => {
-            return {
-                storeName: store,
-                count: storeAggregates[store] || 0, 
-                rank: 0 
-            };
-        });
+        // 객체를 배열로 변환
+        const dashboardData = Object.values(aggregates);
 
+        // 랭킹 정렬
         dashboardData.sort((a, b) => b.count - a.count);
+
+        // 순위 부여
         dashboardData.forEach((item, index) => {
             item.rank = index + 1;
         });
@@ -1220,38 +1237,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
     }
 });
 
-// 4. [GET] 매장 리스트 조회
-app.get('/api/jwasu/stores', (req, res) => {
-    res.json({ success: true, stores: OFFLINE_STORES });
-});
-
-// 5. [GET] 상세 집계표 조회
-app.get('/api/jwasu/table', async (req, res) => {
-    try {
-        const { store, startDate, endDate } = req.query;
-
-        const query = {
-            date: { $gte: startDate, $lte: endDate }
-        };
-
-        if (store && store !== 'all') {
-            query.storeName = store;
-        }
-
-        const collection = db.collection(jwasuCollectionName);
-        const report = await collection.find(query)
-            .sort({ date: -1, storeName: 1 })
-            .toArray();
-
-        res.json({ success: true, report });
-
-    } catch (error) {
-        console.error('집계표 조회 오류:', error);
-        res.status(500).json({ success: false, message: '데이터 조회 실패' });
-    }
-});
-
-// 6. [GET] 월별 히스토리
+// 6. [GET] 월별 좌수왕 히스토리 (매니저 포함)
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
         const { month } = req.query;
@@ -1262,19 +1248,26 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
 
         const collection = db.collection(jwasuCollectionName);
 
+        // [수정] 매장+매니저 기준으로 그룹화
         const pipeline = [
-            { $match: { date: { $gte: startOfMonth, $lte: endOfMonth } } },
-            { $group: { _id: "$storeName", totalCount: { $sum: "$count" } } }
+            { 
+                $match: { date: { $gte: startOfMonth, $lte: endOfMonth } } 
+            },
+            { 
+                $group: { 
+                    _id: { store: "$storeName", manager: "$managerName" }, // 복합 키
+                    totalCount: { $sum: "$count" } 
+                } 
+            }
         ];
 
         const aggResults = await collection.aggregate(pipeline).toArray();
-        const resultMap = {};
-        aggResults.forEach(item => resultMap[item._id] = item.totalCount);
 
-        const historyData = OFFLINE_STORES.map(store => {
+        const historyData = aggResults.map(item => {
             return {
-                storeName: store,
-                count: resultMap[store] || 0,
+                storeName: item._id.store,
+                managerName: item._id.manager || '미지정',
+                count: item.totalCount,
                 rank: 0
             };
         });
@@ -1289,109 +1282,6 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
         res.status(500).json({ success: false, message: '월별 조회 실패' });
     }
 });
-
-// 7. [GET] 내 통계 조회
-app.get('/api/jwasu/my-stats', async (req, res) => {
-    try {
-        const { storeName } = req.query;
-        if (!storeName) return res.status(400).json({ success: false, message: '매장명 필요' });
-
-        const now = moment().tz('Asia/Seoul');
-        const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
-        const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
-
-        const collection = db.collection(jwasuCollectionName);
-        const dailyRecords = await collection.find({
-            storeName: storeName,
-            date: { $gte: startOfThisMonth, $lte: endOfThisMonth }
-        }).sort({ date: -1 }).toArray();
-
-        res.json({ success: true, data: dailyRecords });
-
-    } catch (error) {
-        console.error('통계 조회 오류:', error);
-        res.status(500).json({ success: false, message: '통계 조회 실패' });
-    }
-});
-
-// ==========================================
-// [섹션 D] 매니저(쇼핑몰) 관리 시스템 API
-// ==========================================
-
-// 1. [GET] 쇼핑몰 매니저 정보 조회
-app.get('/api/managers', async (req, res) => {
-    try {
-        const { mall_id } = req.query;
-        const collection = db.collection(managerCollectionName);
-        const query = mall_id ? { mall_id: mall_id } : {};
-        const managers = await collection.find(query).toArray();
-
-        res.json({ success: true, managers: managers });
-    } catch (error) {
-        console.error('매니저 조회 오류:', error);
-        res.status(500).json({ success: false, message: '매니저 정보 조회 실패' });
-    }
-});
-
-// 2. [POST] 쇼핑몰 매니저 정보 저장
-app.post('/api/managers', async (req, res) => {
-    try {
-        const { mall_id, shop_url, client_id } = req.body; 
-        if (!mall_id) return res.status(400).json({ success: false, message: 'mall_id 필수' });
-
-        const collection = db.collection(managerCollectionName);
-        const result = await collection.findOneAndUpdate(
-            { mall_id: mall_id },
-            { 
-                $set: { 
-                    mall_id: mall_id,
-                    shop_url: shop_url || '',
-                    client_id: client_id || '',
-                    lastUpdated: new Date()
-                },
-                $setOnInsert: { createdAt: new Date(), status: 'active' }
-            },
-            { upsert: true, returnDocument: 'after' }
-        );
-
-        res.json({ success: true, message: '저장 완료', data: result.value || result });
-
-    } catch (error) {
-        console.error('매니저 저장 오류:', error);
-        res.status(500).json({ success: false, message: '매니저 저장 실패' });
-    }
-});
-
-
-// ==========================================
-// [추가] 링크 ID로 매장 정보 찾기 (암호화된 URL 해석용)
-// ==========================================
-app.get('/api/jwasu/link/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const collection = db.collection(adminCollectionName); // admin_managers 컬렉션
-
-        // ID로 DB에서 검색
-        const info = await collection.findOne({ _id: new ObjectId(id) });
-
-        if (info) {
-            res.json({ 
-                success: true, 
-                storeName: info.storeName, 
-                managerName: info.managerName 
-            });
-        } else {
-            res.status(404).json({ success: false, message: '유효하지 않은 링크입니다.' });
-        }
-
-    } catch (error) {
-        console.error('링크 조회 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류' });
-    }
-});
-
-
-
 
 
 
