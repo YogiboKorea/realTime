@@ -970,42 +970,119 @@ app.get('/api/clean-bots', async (req, res) => {
 
 
 
+
 // ==========================================
-// [섹션 C] 오프라인 좌수왕(Seat Count) 시스템 (최종 정제버전)
+// [섹션 C] 오프라인 좌수왕 (매니저 기능 추가 버전)
 // ==========================================
 
-const jwasuCollectionName = 'offline_jwasu'; // 좌수 데이터 컬렉션
+const { ObjectId } = require('mongodb'); // ObjectId 사용을 위해 추가 필요
+const jwasuCollectionName = 'offline_jwasu';          // 카운트 데이터
+const managerCollectionName = 'offline_jwasu_managers'; // 매니저 관리 데이터
 
 // 1. 관리 대상 매장 리스트
 const OFFLINE_STORES = [
-    "롯데안산",
-    "롯데동탄",
-    "롯데대구",
-    "신세계센텀시티몰",
-    "스타필드고양",
-    "스타필드하남",
-    "현대미아",
-    "현대울산"
+    "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
+    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
 ];
-// 2. [POST] 좌수 카운트 증가 API (버그 수정됨)
+
+// ==========================================
+// [New] 어드민: 매니저 관리 API
+// ==========================================
+
+// 1. [POST] 매니저 생성 및 URL 발급
+app.post('/api/jwasu/admin/manager', async (req, res) => {
+    try {
+        const { storeName, managerName } = req.body;
+
+        if (!storeName || !managerName) {
+            return res.status(400).json({ success: false, message: '매장명과 매니저 이름을 모두 입력해주세요.' });
+        }
+
+        const collection = db.collection(managerCollectionName);
+
+        // 중복 체크
+        const exists = await collection.findOne({ storeName, managerName });
+        if (exists) {
+            return res.status(400).json({ success: false, message: '이미 해당 매장에 등록된 매니저입니다.' });
+        }
+
+        // 새 매니저 등록
+        const newManager = {
+            storeName,
+            managerName,
+            createdAt: new Date()
+        };
+
+        const result = await collection.insertOne(newManager);
+
+        res.json({ success: true, message: '매니저가 등록되었습니다.', id: result.insertedId });
+
+    } catch (error) {
+        console.error('매니저 등록 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
+
+// 2. [GET] 등록된 매니저 목록 조회
+app.get('/api/jwasu/admin/managers', async (req, res) => {
+    try {
+        const collection = db.collection(managerCollectionName);
+        // 최신순 정렬
+        const managers = await collection.find({}).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, managers });
+    } catch (error) {
+        console.error('매니저 목록 조회 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
+
+// 3. [DELETE] 매니저 삭제
+app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const collection = db.collection(managerCollectionName);
+        
+        const result = await collection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 1) {
+            res.json({ success: true, message: '삭제되었습니다.' });
+        } else {
+            res.status(404).json({ success: false, message: '찾을 수 없는 매니저입니다.' });
+        }
+    } catch (error) {
+        console.error('매니저 삭제 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
+
+
+// ==========================================
+// [Update] 클라이언트: 좌수 카운팅 API (매니저 반영)
+// ==========================================
+
+// 4. [POST] 좌수 카운트 증가 (매장 + 매니저 구분)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
-        const { storeName } = req.body;
+        // [변경] managerName 파라미터 추가
+        const { storeName, managerName } = req.body;
 
         if (!OFFLINE_STORES.includes(storeName)) {
             return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
         }
+        
+        // 매니저 이름이 없을 경우(구버전 호환) 처리
+        const activeManager = managerName || '공통';
 
-        // 날짜 계산
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
         const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
 
         const collection = db.collection(jwasuCollectionName);
 
-        // 1. 오늘 날짜 카운트 증가
+        // 1. [변경] 검색 조건에 managerName 추가
+        // (날짜, 매장, 매니저)가 유니크 키가 됨
         const result = await collection.findOneAndUpdate(
-            { date: todayStr, storeName: storeName },
+            { date: todayStr, storeName: storeName, managerName: activeManager },
             { 
                 $inc: { count: 1 }, 
                 $set: { lastUpdated: new Date() },
@@ -1014,12 +1091,14 @@ app.post('/api/jwasu/increment', async (req, res) => {
             { upsert: true, returnDocument: 'after' }
         );
 
-        // [수정 포인트] MongoDB 드라이버 버전에 따라 리턴 구조가 다름을 방어하는 코드
-        // result.value가 있으면(구버전) 쓰고, 없으면 result 자체(신버전)를 씁니다.
         const updatedDoc = result.value || result; 
-        const todayCount = updatedDoc.count;
+        
+        // 이 매니저의 오늘 카운트
+        const managerTodayCount = updatedDoc.count; 
 
-        // 2. 이번 달 전체 누적 합계 계산
+        // 2. [유지] 이번 달 매장 전체(모든 매니저 합산) 누적 합계 계산
+        // 사용자는 매니저별로 찍지만, 보여주는 건 "매장 전체 랭킹"이어야 하므로 
+        // storeName으로만 그룹핑하여 합산합니다.
         const pipeline = [
             { 
                 $match: { 
@@ -1030,53 +1109,54 @@ app.post('/api/jwasu/increment', async (req, res) => {
             { 
                 $group: { 
                     _id: null, 
-                    total: { $sum: "$count" }
+                    total: { $sum: "$count" } // 해당 매장의 모든 매니저 count 합산
                 } 
             }
         ];
         
         const aggResult = await collection.aggregate(pipeline).toArray();
-        const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : todayCount;
+        const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : managerTodayCount;
 
-        // 3. 두 가지 값 모두 반환
         res.json({ 
             success: true, 
             storeName: storeName, 
-            todayCount: todayCount,    // 오늘 누적
-            monthlyTotal: monthlyTotal // 이번달 총합
+            managerName: activeManager,
+            todayCount: managerTodayCount, // (참고용) 해당 매니저의 오늘 카운트
+            monthlyTotal: monthlyTotal     // (중요) 매장의 이번달 총합 (랭킹용)
         });
 
     } catch (error) {
         console.error('좌수 증가 오류:', error);
-        // 에러 상세 내용을 로그로 확인하기 위해 error 객체 출력
-        console.log(error); 
         res.status(500).json({ success: false, message: '카운트 처리 중 오류 발생' });
     }
 });
 
-// [추가] 2-1. [POST] 좌수 카운트 취소 (Undo) API
+// 5. [POST] 좌수 카운트 취소 (매니저 구분)
 app.post('/api/jwasu/undo', async (req, res) => {
     try {
-        const { storeName } = req.body;
+        const { storeName, managerName } = req.body;
+        const activeManager = managerName || '공통';
 
-        // 오늘 날짜 및 이번 달 1일 계산
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
         const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
 
         const collection = db.collection(jwasuCollectionName);
 
-        // 1. 해당 매장의 오늘 데이터 검색
-        const currentDoc = await collection.findOne({ date: todayStr, storeName: storeName });
+        // 1. [변경] 해당 매니저의 오늘 데이터 검색
+        const currentDoc = await collection.findOne({ 
+            date: todayStr, 
+            storeName: storeName, 
+            managerName: activeManager 
+        });
 
-        // 데이터가 없거나 카운트가 0이면 취소 불가
         if (!currentDoc || currentDoc.count <= 0) {
             return res.status(400).json({ success: false, message: '취소할 내역이 없습니다.' });
         }
 
-        // 2. 카운트 1 감소 ($inc: -1)
+        // 2. 카운트 감소
         const result = await collection.findOneAndUpdate(
-            { date: todayStr, storeName: storeName },
+            { date: todayStr, storeName: storeName, managerName: activeManager },
             { 
                 $inc: { count: -1 }, 
                 $set: { lastUpdated: new Date() } 
@@ -1084,7 +1164,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
             { returnDocument: 'after' }
         );
 
-        // 3. 감소된 후의 이번 달 누적 합계 다시 계산
+        // 3. 감소된 후 매장 전체 누적 합계 재계산
         const pipeline = [
             { $match: { storeName: storeName, date: { $gte: startOfMonth, $lte: todayStr } } },
             { $group: { _id: null, total: { $sum: "$count" } } }
@@ -1093,11 +1173,11 @@ app.post('/api/jwasu/undo', async (req, res) => {
         const aggResult = await collection.aggregate(pipeline).toArray();
         const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : 0;
 
-        // 결과 반환
         res.json({ 
             success: true, 
             storeName: storeName, 
-            todayCount: result.value ? result.value.count : result.count, // 버전 호환 처리
+            managerName: activeManager,
+            todayCount: result.value ? result.value.count : result.count,
             monthlyTotal: monthlyTotal 
         });
 
@@ -1107,29 +1187,30 @@ app.post('/api/jwasu/undo', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회 (월초 ~ 선택일까지 누적 집계)
+// ==========================================
+// [통계 API] (기존 로직과 호환성 유지)
+// ==========================================
+// * 설명: 아래 통계 API들은 'storeName'을 기준으로 합산하므로,
+// * 데이터가 (매장 A, 매니저 1)과 (매장 A, 매니저 2)로 나뉘어 저장되어 있어도
+// * 자동으로 매장 A의 총합으로 합쳐져서 계산됩니다. 코드 수정 불필요.
+
+// 6. [GET] 대시보드 데이터 조회
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
-        // 1. 날짜 범위 설정 로직
-        // 쿼리로 받은 날짜가 없으면 오늘 날짜 사용
         const queryDate = req.query.date;
         const targetEndDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
-        
-        // 해당 날짜가 속한 달의 1일 구하기 (예: 2025-11-25 -> 2025-11-01)
         const targetStartDate = moment(targetEndDate).startOf('month').format('YYYY-MM-DD');
 
         const collection = db.collection(jwasuCollectionName);
 
-        // 2. DB 조회: [월초 ~ 선택일] 사이의 모든 기록 가져오기
+        // [중요] 여기서는 매니저 구분 없이 날짜와 매장 범위로 다 긁어옵니다.
         const records = await collection.find({ 
-            date: { 
-                $gte: targetStartDate, // 크거나 같다 (1일)
-                $lte: targetEndDate    // 작거나 같다 (선택일)
-            } 
+            date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
-        // 3. 매장별 누적 합계 계산 (Aggregation)
-        // DB에서 가져온 여러 날짜의 기록들을 매장별로 묶어서 더함
+        // JS 집계 로직: 
+        // 같은 매장에 대해 여러 매니저의 문서가 있어도 storeName 키로 값을 계속 더하므로 
+        // 매장별 총합이 정상적으로 계산됩니다.
         const storeAggregates = {};
         
         records.forEach(record => {
@@ -1139,96 +1220,75 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             storeAggregates[record.storeName] += record.count;
         });
 
-        // 4. 전체 매장 리스트(OFFLINE_STORES)를 기준으로 최종 데이터 포맷팅
-        // 기록이 아예 없는 매장도 0으로 표시하기 위함
         const dashboardData = OFFLINE_STORES.map(store => {
             return {
                 storeName: store,
-                // 계산해둔 합계가 있으면 쓰고, 없으면 0
                 count: storeAggregates[store] || 0, 
                 rank: 0 
             };
         });
 
-        // 5. 카운트 기준 내림차순 정렬 (랭킹)
         dashboardData.sort((a, b) => b.count - a.count);
+        dashboardData.forEach((item, index) => item.rank = index + 1);
 
-        // 6. 랭킹 번호 부여
-        dashboardData.forEach((item, index) => {
-            item.rank = index + 1;
-        });
-
-        // 7. 전체 총합 계산
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
         res.json({ 
             success: true, 
-            startDate: targetStartDate, // 프론트 표시용 시작일
-            endDate: targetEndDate,     // 프론트 표시용 종료일 (선택일)
+            startDate: targetStartDate, 
+            endDate: targetEndDate, 
             totalCount: totalCount,
             data: dashboardData 
         });
 
     } catch (error) {
         console.error('대시보드 조회 오류:', error);
-        res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
+        res.status(500).json({ success: false, message: '오류 발생' });
     }
 });
-// 4. [GET] 매장 리스트 조회 (드롭박스용)
+
+// 7. [GET] 매장 리스트 (드롭박스용)
 app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 기간별/매장별 상세 집계표 조회 API (table.html용)
+// 8. [GET] 상세 집계표 (Table)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
-
-        // 1. 검색 조건 설정
         const query = {
-            date: {
-                $gte: startDate, // 시작일
-                $lte: endDate    // 종료일
-            }
+            date: { $gte: startDate, $lte: endDate }
         };
-
-        // 전체가 아닐 경우 매장명 필터 추가
         if (store && store !== 'all') {
             query.storeName = store;
         }
 
         const collection = db.collection(jwasuCollectionName);
-
-        // 2. 데이터 조회 및 정렬 (날짜 내림차순 -> 매장명 오름차순)
+        
+        // 매니저별 내역도 상세하게 보고 싶다면 그대로 반환하면 됩니다.
+        // 현재 구조상: 날짜 | 매장 | 매니저 | 카운트 형태로 리스트가 나옵니다.
         const report = await collection.find(query)
-            .sort({ date: -1, storeName: 1 })
+            .sort({ date: -1, storeName: 1, managerName: 1 }) // 매니저 이름 순 정렬 추가
             .toArray();
 
         res.json({ success: true, report });
-
     } catch (error) {
-        console.error('집계표 조회 오류:', error);
         res.status(500).json({ success: false, message: '데이터 조회 실패' });
     }
 });
 
-
-// 6. [GET] 월별 좌수왕(명예의 전당) 히스토리 조회 API
+// 9. [GET] 월별 히스토리 (명예의 전당)
+// 이 부분도 MongoDB Aggregation Pipeline에서 $group by storeName을 하므로 
+// 매니저가 나뉘어도 매장별 합계는 정확히 계산됩니다.
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
-        const { month } = req.query; // 예: "2025-11"
+        const { month } = req.query;
+        if (!month) return res.status(400).json({ success: false, message: '월 정보 필요' });
 
-        if (!month) {
-            return res.status(400).json({ success: false, message: '월(month) 정보가 필요합니다.' });
-        }
-
-        // 1. 해당 월의 시작일(1일)과 마지막 날 계산
         const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
         const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
 
-        // 2. 해당 기간 내 데이터 집계 (매장별 합산)
         const pipeline = [
             {
                 $match: {
@@ -1237,73 +1297,66 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
             },
             {
                 $group: {
-                    _id: "$storeName",
+                    _id: "$storeName", // 여기서 매장별로 다 합침 (매니저 무관)
                     totalCount: { $sum: "$count" }
                 }
             }
         ];
 
         const aggResults = await collection.aggregate(pipeline).toArray();
-
-        // 3. 결과를 Map으로 변환 (매장명 -> 카운트)
         const resultMap = {};
-        aggResults.forEach(item => {
-            resultMap[item._id] = item.totalCount;
-        });
+        aggResults.forEach(item => resultMap[item._id] = item.totalCount);
 
-        // 4. 전체 매장 리스트 기준으로 데이터 포맷팅 (데이터 없으면 0)
-        const historyData = OFFLINE_STORES.map(store => {
-            return {
-                storeName: store,
-                count: resultMap[store] || 0,
-                rank: 0
-            };
-        });
+        const historyData = OFFLINE_STORES.map(store => ({
+            storeName: store,
+            count: resultMap[store] || 0,
+            rank: 0
+        }));
 
-        // 5. 랭킹 산정 (내림차순)
         historyData.sort((a, b) => b.count - a.count);
-        historyData.forEach((item, index) => {
-            item.rank = index + 1;
-        });
+        historyData.forEach((item, index) => item.rank = index + 1);
 
         res.json(historyData);
-
     } catch (error) {
-        console.error('월별 기록 조회 오류:', error);
-        res.status(500).json({ success: false, message: '월별 기록 조회 실패' });
+        res.status(500).json({ success: false, message: '조회 실패' });
     }
 });
 
-// 7. [GET] 특정 매장 내 통계 (이번 달 일별 내역만) 조회 API
+// 10. [GET] 내 통계
 app.get('/api/jwasu/my-stats', async (req, res) => {
     try {
-        const { storeName } = req.query;
-        if (!storeName) return res.status(400).json({ success: false, message: '매장명이 필요합니다.' });
+        const { storeName, managerName } = req.query; // managerName 필터 추가 가능
+        if (!storeName) return res.status(400).json({ success: false, message: '매장명 필요' });
 
         const now = moment().tz('Asia/Seoul');
-        
-        // 이번 달의 시작일(1일)과 마지막 날(말일) 계산
         const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
         const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
 
         const collection = db.collection(jwasuCollectionName);
 
-        // [수정] 이번 달 일별 데이터만 조회 (최신순 정렬)
-        const dailyRecords = await collection.find({
+        // 쿼리 조건 생성
+        const query = {
             storeName: storeName,
             date: { $gte: startOfThisMonth, $lte: endOfThisMonth }
-        }).sort({ date: -1 }).toArray();
+        };
+        
+        // 매니저 이름이 쿼리로 들어오면 본인 것만 필터링해서 보여줌 (옵션)
+        if (managerName) {
+            query.managerName = managerName;
+        }
 
-        res.json({
-            success: true,
-            data: dailyRecords // 일별 데이터만 반환
-        });
+        const dailyRecords = await collection.find(query).sort({ date: -1 }).toArray();
 
+        res.json({ success: true, data: dailyRecords });
     } catch (error) {
-        console.error('내 통계 조회 오류:', error);
         res.status(500).json({ success: false, message: '통계 조회 실패' });
     }
 });
+
+
+
+
+
 // ==========================================
 // [API 라우터 시작] (작성하신 코드)
 // ==========================================
