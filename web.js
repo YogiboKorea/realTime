@@ -968,24 +968,17 @@ app.get('/api/clean-bots', async (req, res) => {
 });
 
 
-
 // ==========================================
-// [전역 변수 설정] - API 코드보다 위에 있어야 에러가 안 납니다.
+// [전역 변수 설정]
 // ==========================================
-const jwasuCollectionName = 'offline_jwasu';   // 좌수 데이터 (매장+매니저+날짜)
-const managerCollectionName = 'managers';      // 카페24 쇼핑몰 매니저 데이터
-const adminCollectionName = 'admin_managers';  // 관리자가 수동 등록한 링크 목록
+const jwasuCollectionName = 'offline_jwasu';   // 좌수 데이터
+const managerCollectionName = 'managers';      // 매니저 데이터
+const adminCollectionName = 'admin_managers';  // 관리자 링크
 
 // 관리 대상 매장 리스트
 const OFFLINE_STORES = [
-    "롯데안산",
-    "롯데동탄",
-    "롯데대구",
-    "신세계센텀시티몰",
-    "스타필드고양",
-    "스타필드하남",
-    "현대미아",
-    "현대울산"
+    "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
+    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
 ];
 
 // ==========================================
@@ -1008,97 +1001,63 @@ app.get('/api/jwasu/admin/managers', async (req, res) => {
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
-
         if (!storeName || !managerName) {
             return res.status(400).json({ success: false, message: '매장명과 매니저 이름은 필수입니다.' });
         }
-
         const collection = db.collection(adminCollectionName);
-
-        // 중복 확인
         const exists = await collection.findOne({ storeName, managerName });
-        if (exists) {
-            return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
-        }
+        if (exists) return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
 
-        await collection.insertOne({
-            storeName,
-            managerName,
-            createdAt: new Date()
-        });
-
+        await collection.insertOne({ storeName, managerName, createdAt: new Date() });
         res.json({ success: true, message: '매니저가 등록되었습니다.' });
-
     } catch (error) {
         console.error('매니저 등록 오류:', error);
         res.status(500).json({ success: false, message: '등록 중 오류가 발생했습니다.' });
     }
 });
+
 // 3. [DELETE] 매니저(링크) 삭제 + 해당 매니저의 모든 기록 삭제
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const adminCollection = db.collection(adminCollectionName); // 링크 관리 DB
-        const dataCollection = db.collection(jwasuCollectionName);  // 좌수 기록 DB
+        const adminCollection = db.collection(adminCollectionName);
+        const dataCollection = db.collection(jwasuCollectionName);
 
-        // 1. 삭제하기 전에 매니저 정보(매장명, 이름)를 먼저 찾습니다.
         const targetManager = await adminCollection.findOne({ _id: new ObjectId(id) });
+        if (!targetManager) return res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
 
-        if (!targetManager) {
-            return res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
-        }
-
-        // 2. 해당 매니저가 기록한 모든 좌수 데이터 삭제 (deleteMany)
-        // 주의: 동명이인 방지 로직이 등록 시점에 있으므로, 이 조합으로 지우면 안전합니다.
         const deleteDataResult = await dataCollection.deleteMany({
             storeName: targetManager.storeName,
             managerName: targetManager.managerName
         });
 
-        // 3. 관리자 목록(링크)에서 삭제
         const deleteLinkResult = await adminCollection.deleteOne({ _id: new ObjectId(id) });
 
-        console.log(`매니저 삭제됨: ${targetManager.storeName} ${targetManager.managerName}`);
-        console.log(`ㄴ 관련 기록 삭제: ${deleteDataResult.deletedCount}건`);
+        console.log(`매니저 삭제됨: ${targetManager.storeName} ${targetManager.managerName} (기록 ${deleteDataResult.deletedCount}건 삭제)`);
 
         if (deleteLinkResult.deletedCount === 1) {
-            res.json({ 
-                success: true, 
-                message: `매니저와 관련된 기록 ${deleteDataResult.deletedCount}건이 모두 삭제되었습니다.` 
-            });
+            res.json({ success: true, message: `기록 ${deleteDataResult.deletedCount}건이 모두 삭제되었습니다.` });
         } else {
             res.status(404).json({ success: false, message: '링크 삭제 중 문제가 발생했습니다.' });
         }
-
     } catch (error) {
         console.error('삭제 오류:', error);
         res.status(500).json({ success: false, message: '삭제 처리 중 오류 발생' });
     }
 });
 
-// 4. [GET] 링크 ID로 매장/매니저 정보 조회 (암호화된 URL 해석용)
+// 4. [GET] 링크 ID로 매장/매니저 정보 조회
 app.get('/api/jwasu/link/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // ID 형식이 올바른지 체크 (길이 등)
-        if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ success: false, message: '잘못된 링크 형식입니다.' });
-        }
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: '잘못된 링크 형식입니다.' });
 
-        const collection = db.collection(adminCollectionName);
-        const info = await collection.findOne({ _id: new ObjectId(id) });
-
+        const info = await db.collection(adminCollectionName).findOne({ _id: new ObjectId(id) });
         if (info) {
-            res.json({ 
-                success: true, 
-                storeName: info.storeName, 
-                managerName: info.managerName 
-            });
+            res.json({ success: true, storeName: info.storeName, managerName: info.managerName });
         } else {
             res.status(404).json({ success: false, message: '유효하지 않은 링크입니다.' });
         }
-
     } catch (error) {
         console.error('링크 조회 오류:', error);
         res.status(500).json({ success: false, message: '서버 오류' });
@@ -1110,11 +1069,11 @@ app.get('/api/jwasu/link/:id', async (req, res) => {
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
 // ==========================================
 
-// 1. [POST] 좌수 카운트 증가 (매니저 정보 포함)
+// 1. [POST] 좌수 카운트 증가
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
-        const mgrName = managerName || '미지정'; // 매니저 이름이 없으면 '미지정'
+        const mgrName = managerName || '미지정';
 
         if (!OFFLINE_STORES.includes(storeName)) {
             return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
@@ -1123,10 +1082,8 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
         const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
 
-        // 날짜 + 매장 + 매니저 조합으로 저장
         const result = await collection.findOneAndUpdate(
             { date: todayStr, storeName: storeName, managerName: mgrName },
             { 
@@ -1140,30 +1097,15 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const updatedDoc = result.value || result; 
         const todayCount = updatedDoc.count;
 
-        // 이번 달 합계 (해당 매니저 기준)
+        // 월별 합계 계산
         const pipeline = [
-            { 
-                $match: { 
-                    storeName: storeName,
-                    managerName: mgrName,
-                    date: { $gte: startOfMonth, $lte: todayStr }
-                } 
-            },
-            { 
-                $group: { _id: null, total: { $sum: "$count" } } 
-            }
+            { $match: { storeName: storeName, managerName: mgrName, date: { $gte: startOfMonth, $lte: todayStr } } },
+            { $group: { _id: null, total: { $sum: "$count" } } }
         ];
-        
         const aggResult = await collection.aggregate(pipeline).toArray();
         const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : todayCount;
 
-        res.json({ 
-            success: true, 
-            storeName: storeName, 
-            managerName: mgrName,
-            todayCount: todayCount,
-            monthlyTotal: monthlyTotal 
-        });
+        res.json({ success: true, storeName, managerName: mgrName, todayCount, monthlyTotal });
 
     } catch (error) {
         console.error('좌수 증가 오류:', error);
@@ -1176,25 +1118,17 @@ app.post('/api/jwasu/undo', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
         const mgrName = managerName || '미지정';
-
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
         const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
 
         const currentDoc = await collection.findOne({ date: todayStr, storeName: storeName, managerName: mgrName });
-
-        if (!currentDoc || currentDoc.count <= 0) {
-            return res.status(400).json({ success: false, message: '취소할 내역이 없습니다.' });
-        }
+        if (!currentDoc || currentDoc.count <= 0) return res.status(400).json({ success: false, message: '취소할 내역이 없습니다.' });
 
         const result = await collection.findOneAndUpdate(
             { date: todayStr, storeName: storeName, managerName: mgrName },
-            { 
-                $inc: { count: -1 }, 
-                $set: { lastUpdated: new Date() } 
-            },
+            { $inc: { count: -1 }, $set: { lastUpdated: new Date() } },
             { returnDocument: 'after' }
         );
 
@@ -1202,19 +1136,11 @@ app.post('/api/jwasu/undo', async (req, res) => {
             { $match: { storeName: storeName, managerName: mgrName, date: { $gte: startOfMonth, $lte: todayStr } } },
             { $group: { _id: null, total: { $sum: "$count" } } }
         ];
-        
         const aggResult = await collection.aggregate(pipeline).toArray();
         const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : 0;
-
         const updatedDoc = result.value || result;
 
-        res.json({ 
-            success: true, 
-            storeName: storeName, 
-            managerName: mgrName,
-            todayCount: updatedDoc ? updatedDoc.count : 0, 
-            monthlyTotal: monthlyTotal 
-        });
+        res.json({ success: true, storeName, managerName: mgrName, todayCount: updatedDoc ? updatedDoc.count : 0, monthlyTotal });
 
     } catch (error) {
         console.error('취소 처리 오류:', error);
@@ -1222,57 +1148,32 @@ app.post('/api/jwasu/undo', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회 (매장+매니저별 랭킹)
+// 3. [GET] 대시보드 데이터 조회
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
         const targetEndDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
         const targetStartDate = moment(targetEndDate).startOf('month').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
 
-        const records = await collection.find({ 
-            date: { 
-                $gte: targetStartDate, 
-                $lte: targetEndDate 
-            } 
-        }).toArray();
+        const records = await collection.find({ date: { $gte: targetStartDate, $lte: targetEndDate } }).toArray();
 
-        // 매장_매니저 키로 그룹화
         const aggregates = {};
         records.forEach(record => {
             const mgr = record.managerName || '미지정';
             const key = `${record.storeName}_${mgr}`;
-
             if (!aggregates[key]) {
-                aggregates[key] = {
-                    storeName: record.storeName,
-                    managerName: mgr,
-                    count: 0,
-                    rank: 0
-                };
+                aggregates[key] = { storeName: record.storeName, managerName: mgr, count: 0, rank: 0 };
             }
             aggregates[key].count += record.count;
         });
 
-        // 배열로 변환
         const dashboardData = Object.values(aggregates);
-
-        // 랭킹 정렬
         dashboardData.sort((a, b) => b.count - a.count);
-        dashboardData.forEach((item, index) => {
-            item.rank = index + 1;
-        });
-
+        dashboardData.forEach((item, index) => { item.rank = index + 1; });
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
-        res.json({ 
-            success: true, 
-            startDate: targetStartDate, 
-            endDate: targetEndDate,
-            totalCount: totalCount,
-            data: dashboardData 
-        });
+        res.json({ success: true, startDate: targetStartDate, endDate: targetEndDate, totalCount, data: dashboardData });
 
     } catch (error) {
         console.error('대시보드 조회 오류:', error);
@@ -1285,7 +1186,7 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (공백 무시 + 디버깅 강화)
+// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (★ 핵심 수정됨)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1297,67 +1198,61 @@ app.get('/api/jwasu/table', async (req, res) => {
         end.setHours(23, 59, 59, 999);
 
         // ===============================================
-        // A. 데이터 준비
+        // A. 데이터 조회
         // ===============================================
 
-        // A-1. [매출] 조회
+        // A-1. [매출]
         let salesQuery = { createdAt: { $gte: start, $lte: end } };
-        if (store && store !== 'all') {
-            salesQuery.store = { $in: store.split(',') };
-        }
+        if (store && store !== 'all') { salesQuery.store = { $in: store.split(',') }; }
         const salesData = await db.collection('sales').find(salesQuery).toArray();
 
-        // A-2. [좌수] 조회
+        // A-2. [좌수]
         const startStr = moment(start).tz('Asia/Seoul').format('YYYY-MM-DD');
         const endStr = moment(end).tz('Asia/Seoul').format('YYYY-MM-DD');
-        
         let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
-        if (store && store !== 'all') {
-            jwasuQuery.storeName = { $in: store.split(',') };
-        }
+        if (store && store !== 'all') { jwasuQuery.storeName = { $in: store.split(',') }; }
         const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).toArray();
 
-        // A-3. [매니저] 조회
+        // A-3. [매니저]
         const managerList = await db.collection('managers').find().toArray();
 
-        // ★ [디버깅] 매니저 DB 필드명 확인용 로그 (첫 번째 데이터 출력)
+        // ★ [디버깅] 매니저 DB 필드 확인용
         if (managerList.length > 0) {
-            console.log('🔍 [매니저 DB 필드 확인]', managerList[0]);
-        } else {
-            console.log('⚠️ 매니저 데이터가 비어있습니다.');
+            console.log('🔍 [매니저 DB 첫번째 데이터 구조]:', JSON.stringify(managerList[0], null, 2));
         }
 
         // ===============================================
-        // B. 데이터 맵핑 (Map 만들기 - 공백 완전 제거 전략)
+        // B. 데이터 맵핑 (강력한 연결 로직)
         // ===============================================
 
-        // B-1. 매니저 Map { "매장명(공백없음)": "매니저이름" }
+        // ★ [수동 매핑 사전] 이름이 달라서 매칭 안될 때 여기에 추가
+        const manualNameMap = {
+            "현대울산": "현대울산", // 예: "현대울산": "현대백화점 울산점"
+            // "화면매장명": "DB매장명"
+        };
+
         const managerMap = {};
         managerList.forEach(m => {
-            // 1) 매장명 필드 찾기 (여러 후보군 체크)
-            const rawKey = m.mall_id || m.storeName || m.store || m.shop_name;
-            // 2) 매니저 이름 필드 찾기
-            const val = m.client_id || m.managerName || m.name || m.manager_name;
+            // DB 필드명 후보군 스캔
+            const rawKey = m.mall_id || m.storeName || m.store || m.shop_name || m.mall_name;
+            const val = m.client_id || m.managerName || m.name || m.manager_name || m.user_id;
 
             if (rawKey && val) {
-                // ★ 핵심: 모든 공백을 제거해버림 ( "롯데 강남" -> "롯데강남" )
+                // 공백 완전 제거 ("롯데 강남" -> "롯데강남")
                 const cleanKey = String(rawKey).replace(/\s+/g, '');
                 managerMap[cleanKey] = val;
             }
         });
 
-        // B-2. 매출 Map
         const salesMap = {};
         salesData.forEach(s => {
             const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
             const rawStore = s.store || '알수없음';
-            const key = `${rawStore}|${dateStr}`; // 여기는 원본 유지 (나중에 split할때 씀)
-            
+            const key = `${rawStore}|${dateStr}`;
             if (!salesMap[key]) salesMap[key] = { revenue: 0, _id: s._id };
             salesMap[key].revenue += (s.revenue || 0);
         });
 
-        // B-3. 좌수 Map
         const jwasuMap = {};
         jwasuList.forEach(j => {
             const rawStore = j.storeName || '알수없음';
@@ -1366,49 +1261,47 @@ app.get('/api/jwasu/table', async (req, res) => {
         });
 
         // ===============================================
-        // C. 데이터 통합 (합집합)
+        // C. 데이터 통합 (Full Outer Join)
         // ===============================================
 
         const allKeys = new Set([ ...Object.keys(salesMap), ...Object.keys(jwasuMap) ]);
 
         const report = Array.from(allKeys).map(key => {
-            const [storeName, dateStr] = key.split('|'); // storeName은 원본 (띄어쓰기 포함될 수 있음)
+            const [storeName, dateStr] = key.split('|');
 
             const salesInfo = salesMap[key] || { revenue: 0, _id: null };
             const countInfo = jwasuMap[key] || 0;
 
-            // ★ 매니저 찾을 때도 공백 다 빼고 찾기
-            const lookupKey = String(storeName).replace(/\s+/g, '');
-            const managerName = managerMap[lookupKey] || '미지정';
+            // ★ 매니저 찾기 로직
+            // 1. 공백 제거 후 검색
+            let lookupKey = String(storeName).replace(/\s+/g, '');
+            let managerName = managerMap[lookupKey];
 
-            // [디버깅] 매칭 안된 경우 로그 한 번만 찍기 (너무 많으면 시끄러우니까)
-            if (managerName === '미지정' && Math.random() < 0.05) { 
-                console.log(`⚠️ 매칭 실패: [${lookupKey}] 키가 managerMap에 없습니다.`);
-                // console.log('가능한 키 목록:', Object.keys(managerMap)); // 필요시 주석 해제
+            // 2. 없으면 수동 매핑 사전 확인
+            if (!managerName && manualNameMap[storeName]) {
+                 const dbName = manualNameMap[storeName].replace(/\s+/g, '');
+                 managerName = managerMap[dbName];
             }
 
             return {
                 _id: salesInfo._id || `temp_${key}`,
                 date: dateStr,
-                storeName: storeName, // 화면엔 예쁜 원본 이름 표시
+                storeName: storeName,
                 store: storeName,
                 revenue: salesInfo.revenue,
                 sales: salesInfo.revenue,
                 amount: countInfo,
                 count: countInfo,
-                managerName: managerName
+                managerName: managerName || '미지정'
             };
         });
 
-        // ===============================================
-        // D. 정렬 및 반환
-        // ===============================================
+        // 정렬
         report.sort((a, b) => {
             if (a.date !== b.date) return b.date.localeCompare(a.date);
             return a.storeName.localeCompare(b.storeName);
         });
 
-        console.log(`✅ [API 결과] 총 ${report.length}건 조회 완료.`);
         res.json({ success: true, report: report });
 
     } catch (error) {
@@ -1416,43 +1309,32 @@ app.get('/api/jwasu/table', async (req, res) => {
         res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
-// 6. [GET] 월별 히스토리 (매장+매니저 기준)
+
+// 6. [GET] 월별 히스토리
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
         const { month } = req.query;
         if (!month) return res.status(400).json({ success: false, message: '월 정보 필요' });
-
         const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
         const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
 
         const pipeline = [
             { $match: { date: { $gte: startOfMonth, $lte: endOfMonth } } },
-            { 
-                $group: { 
-                    _id: { store: "$storeName", manager: "$managerName" }, 
-                    totalCount: { $sum: "$count" } 
-                } 
-            }
+            { $group: { _id: { store: "$storeName", manager: "$managerName" }, totalCount: { $sum: "$count" } } }
         ];
 
         const aggResults = await collection.aggregate(pipeline).toArray();
-        
-        const historyData = aggResults.map(item => {
-            return {
-                storeName: item._id.store,
-                managerName: item._id.manager || '미지정',
-                count: item.totalCount,
-                rank: 0
-            };
-        });
-
+        const historyData = aggResults.map(item => ({
+            storeName: item._id.store,
+            managerName: item._id.manager || '미지정',
+            count: item.totalCount,
+            rank: 0
+        }));
         historyData.sort((a, b) => b.count - a.count);
         historyData.forEach((item, index) => item.rank = index + 1);
 
         res.json(historyData);
-
     } catch (error) {
         console.error('월별 조회 오류:', error);
         res.status(500).json({ success: false, message: '월별 조회 실패' });
@@ -1468,23 +1350,16 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
         const now = moment().tz('Asia/Seoul');
         const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
         const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
-
         const collection = db.collection(jwasuCollectionName);
         
-        // 매니저 이름이 있으면 필터링, 없으면 매장 전체
         const query = {
             storeName: storeName,
             date: { $gte: startOfThisMonth, $lte: endOfThisMonth }
         };
-        
-        if (managerName) {
-            query.managerName = managerName;
-        }
+        if (managerName) query.managerName = managerName;
 
         const dailyRecords = await collection.find(query).sort({ date: -1 }).toArray();
-
         res.json({ success: true, data: dailyRecords });
-
     } catch (error) {
         console.error('통계 조회 오류:', error);
         res.status(500).json({ success: false, message: '통계 조회 실패' });
@@ -1493,19 +1368,14 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
 
 
 // =========================================================
-// [신규 섹션] 실시간 매출 집계 및 엑셀 연동 API (sales 컬렉션 사용)
+// [신규 섹션] 실시간 매출 집계 및 엑셀 연동 API
 // =========================================================
 
-// 1. [POST] 판매 등록 (입력용)
+// 1. [POST] 판매 등록
 app.post('/api/sales/record', async (req, res) => {
     try {
         const { store, amount } = req.body;
-        // sales 컬렉션에 저장
-        await db.collection('sales').insertOne({ 
-            store: store, 
-            amount: parseInt(amount), 
-            createdAt: new Date() 
-        });
+        await db.collection('sales').insertOne({ store: store, amount: parseInt(amount), createdAt: new Date() });
         res.json({ success: true });
     } catch (e) { 
         console.error('판매 등록 오류:', e);
@@ -1513,7 +1383,7 @@ app.post('/api/sales/record', async (req, res) => {
     }
 });
 
-// 2. [GET] 매장 목록 조회 (DB에 존재하는 매장명만 추출)
+// 2. [GET] 매장 목록 조회
 app.get('/api/sales/stores', async (req, res) => {
     try {
         const stores = await db.collection('sales').distinct('store');
@@ -1524,32 +1394,22 @@ app.get('/api/sales/stores', async (req, res) => {
     }
 });
 
-// 3. [GET] 판매 집계표 데이터 조회 (매출액 revenue 포함)
+// 3. [GET] 판매 집계표 데이터 조회 (raw data view)
 app.get('/api/sales/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
-        
         const matchQuery = {
-            createdAt: { 
-                $gte: new Date(`${startDate}T00:00:00`), 
-                $lte: new Date(`${endDate}T23:59:59`) 
-            }
+            createdAt: { $gte: new Date(`${startDate}T00:00:00`), $lte: new Date(`${endDate}T23:59:59`) }
         };
-        
-        if (store && store !== 'all') {
-            matchQuery.store = store;
-        }
+        if (store && store !== 'all') matchQuery.store = store;
 
         const report = await db.collection('sales').aggregate([
             { $match: matchQuery },
             { 
                 $group: {
-                    _id: { 
-                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } }, 
-                        store: "$store" 
-                    },
-                    dailyCount: { $sum: "$amount" },   // 버튼 클릭 수 (좌수)
-                    dailyRevenue: { $sum: "$revenue" } // 엑셀 매출액 (원)
+                    _id: { date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } }, store: "$store" },
+                    dailyCount: { $sum: "$amount" },
+                    dailyRevenue: { $sum: "$revenue" }
                 }
             },
             { $sort: { "_id.date": -1, "_id.store": 1 } } 
@@ -1560,7 +1420,6 @@ app.get('/api/sales/table', async (req, res) => {
             dailyCount: r.dailyCount || 0,
             dailyRevenue: r.dailyRevenue || 0
         }));
-
         res.json({ success: true, report: cleanReport });
     } catch (e) { 
         console.error('집계표 조회 오류:', e);
@@ -1568,16 +1427,14 @@ app.get('/api/sales/table', async (req, res) => {
     }
 });
 
-// 4. [GET] 실시간 카운트 (전체 합계)
+// 4. [GET] 실시간 카운트
 app.get('/api/sales/live-count', async (req, res) => {
     try {
         const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-        
         const result = await db.collection('sales').aggregate([
             { $match: { createdAt: { $gte: todayStart } } },
             { $group: { _id: null, total: { $sum: "$amount" } } }
         ]).toArray();
-
         const total = result.length > 0 ? result[0].total : 0;
         res.json({ success: true, totalCount: total, lastUpdated: new Date() });
     } catch (e) { 
@@ -1598,7 +1455,6 @@ app.get('/api/managers', async (req, res) => {
         const collection = db.collection(managerCollectionName);
         const query = mall_id ? { mall_id: mall_id } : {};
         const managers = await collection.find(query).toArray();
-
         res.json({ success: true, managers: managers });
     } catch (error) {
         console.error('매니저 조회 오류:', error);
@@ -1616,27 +1472,17 @@ app.post('/api/managers', async (req, res) => {
         const result = await collection.findOneAndUpdate(
             { mall_id: mall_id },
             { 
-                $set: { 
-                    mall_id: mall_id,
-                    shop_url: shop_url || '',
-                    client_id: client_id || '',
-                    lastUpdated: new Date()
-                },
+                $set: { mall_id, shop_url: shop_url || '', client_id: client_id || '', lastUpdated: new Date() },
                 $setOnInsert: { createdAt: new Date(), status: 'active' }
             },
             { upsert: true, returnDocument: 'after' }
         );
-
         res.json({ success: true, message: '저장 완료', data: result.value || result });
-
     } catch (error) {
         console.error('매니저 저장 오류:', error);
         res.status(500).json({ success: false, message: '매니저 저장 실패' });
     }
 });
-
-
-
 
 
 // ==========================================
