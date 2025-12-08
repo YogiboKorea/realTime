@@ -1557,97 +1557,124 @@ app.get('/api/sales/live-count', async (req, res) => {
         console.error('실시간 카운트 오류:', e);
         res.status(500).json({ success: false }); 
     }
-});// 5. [GET] 상세 집계표 조회 (좌수/매출 완벽 병합 버전)
+});
+
+// [GET] 매장별 좌수(별도DB) + 매출(엑셀DB) + 매니저(매니저DB) 통합 조회
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
 
-        // 1. 기본 검색 조건 (좌수왕 DB용)
-        const jwasuQuery = {
-            date: { $gte: startDate, $lte: endDate }
+        // 1. 날짜 필터 설정
+        const start = startDate ? new Date(startDate) : new Date();
+        start.setHours(0, 0, 0, 0);
+        const end = endDate ? new Date(endDate) : new Date();
+        end.setHours(23, 59, 59, 999);
+
+        // 2. 기본 매칭 조건 (매출 데이터 기준)
+        let matchQuery = {
+            createdAt: { $gte: start, $lte: end },
+            source: 'excel_import' // 엑셀에서 올린 매출 데이터만 타겟팅
         };
 
-        // 2. 다중 매장 선택 처리
-        let targetStores = [];
         if (store && store !== 'all') {
-            targetStores = store.split(',');
-            jwasuQuery.storeName = { $in: targetStores };
+            const storeNames = store.split(',');
+            matchQuery.store = { $in: storeNames };
         }
 
-        // 3. 좌수 데이터 가져오기 (jwasu 컬렉션 - 버튼 클릭)
-        const jwasuCollection = db.collection(jwasuCollectionName);
-        const jwasuRecords = await jwasuCollection.find(jwasuQuery).toArray();
+        const collection = db.collection('sales'); // 매출 컬렉션 (기준)
 
-        // 4. 매출 데이터 가져오기 (sales 컬렉션 - 엑셀 업로드)
-        const salesCollection = db.collection('sales');
-        
-        // 날짜 범위 설정 (UTC 기준 변환)
-        const salesQuery = {
-            createdAt: { 
-                $gte: new Date(`${startDate}T00:00:00.000Z`), 
-                $lte: new Date(`${endDate}T23:59:59.999Z`) 
-            }
-        };
-        if (targetStores.length > 0) {
-            salesQuery.store = { $in: targetStores };
-        }
+        const report = await collection.aggregate([
+            // ---------------------------------------------------------
+            // 1단계: 매출 데이터 필터링
+            // ---------------------------------------------------------
+            { $match: matchQuery },
 
-        const salesRecords = await salesCollection.find(salesQuery).toArray();
+            // ---------------------------------------------------------
+            // 2단계: 날짜 포맷 통일 (매칭을 위해 YYYY-MM-DD 문자열 생성)
+            // ---------------------------------------------------------
+            {
+                $addFields: {
+                    dateStr: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }
+                }
+            },
 
-        // 5. 데이터 병합 (Merge Logic)
-        const mergedData = {};
+            // ---------------------------------------------------------
+            // 3단계: 매니저 정보 가져오기 (매장명으로 Join)
+            // ---------------------------------------------------------
+            {
+                $lookup: {
+                    from: 'managers',         // 매니저 컬렉션 이름
+                    localField: 'store',
+                    foreignField: 'mall_id',
+                    as: 'managerInfo'
+                }
+            },
+            { $unwind: { path: '$managerInfo', preserveNullAndEmptyArrays: true } },
 
-        // (Step 1) 좌수 데이터를 먼저 맵에 넣습니다.
-        jwasuRecords.forEach(rec => {
-            const key = `${rec.date}|${rec.storeName}`;
-            if (!mergedData[key]) {
-                mergedData[key] = {
-                    date: rec.date,
-                    storeName: rec.storeName,
-                    managerName: rec.managerName || '미지정',
-                    count: 0,
-                    sales: 0
-                };
-            }
-            mergedData[key].count += rec.count;
-        });
+            // ---------------------------------------------------------
+            // 4단계: ★ 좌수 데이터 가져오기 (매장명 AND 날짜로 Join)
+            // ---------------------------------------------------------
+            {
+                $lookup: {
+                    from: 'jwasu', // ★ 좌수 데이터가 저장된 컬렉션 이름 (확인 필요!)
+                    let: { 
+                        currentStore: '$store', 
+                        currentDate: '$dateStr' // 위에서 만든 날짜 문자열 사용
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$store', '$$currentStore'] }, // 매장명 일치
+                                        // 좌수 DB의 날짜 필드가 'date' 문자열("2025-12-08")이라고 가정
+                                        { $eq: ['$date', '$$currentDate'] }    
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'jwasuInfo'
+                }
+            },
+            // 좌수 데이터가 여러 개일 수 있으니 합치거나 첫 번째 것 사용 (여기선 첫번째 가정)
+            { $unwind: { path: '$jwasuInfo', preserveNullAndEmptyArrays: true } },
 
-        // (Step 2) 엑셀 매출 데이터를 맵에 합칩니다. (좌수가 없어도 생성!)
-        salesRecords.forEach(rec => {
-            // MongoDB의 Date 객체를 YYYY-MM-DD 문자열로 변환 (한국 시간 기준)
-            const dateStr = moment(rec.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
-            const key = `${dateStr}|${rec.store}`;
+            // ---------------------------------------------------------
+            // 5단계: 최종 데이터 정리 ($project)
+            // ---------------------------------------------------------
+            {
+                $project: {
+                    _id: 1,
+                    date: '$dateStr',
+                    storeName: '$store',
+                    
+                    // 매출은 현재 컬렉션(sales)에서 가져옴
+                    revenue: '$revenue', 
+                    sales: '$revenue',
 
-            if (!mergedData[key]) {
-                // ★ [핵심] 좌수 기록이 없는 날짜/매장이라도 매출이 있으면 데이터를 만듭니다.
-                mergedData[key] = {
-                    date: dateStr,
-                    storeName: rec.store,
-                    managerName: '미지정', // 엑셀엔 매니저 정보가 없으므로
-                    count: 0, // 좌수는 0으로 설정
-                    sales: 0
-                };
-            }
-            // 매출액 합산 (revenue 필드 사용)
-            mergedData[key].sales += (rec.revenue || 0);
-        });
+                    // ★ 좌수는 Join한 jwasuInfo에서 가져옴 (없으면 0)
+                    // jwasuInfo 안에 count 필드가 있다고 가정
+                    count: { $ifNull: ['$jwasuInfo.count', 0] },
+                    amount: { $ifNull: ['$jwasuInfo.count', 0] },
 
-        // 6. 배열로 변환 및 정렬 (날짜 내림차순, 매장 오름차순)
-        const report = Object.values(mergedData).sort((a, b) => {
-            if (a.date !== b.date) return b.date.localeCompare(a.date);
-            return a.storeName.localeCompare(b.storeName);
-        });
+                    // 매니저 이름
+                    managerName: { $ifNull: ['$managerInfo.client_id', '미지정'] }
+                }
+            },
 
-        res.json({ success: true, report });
+            // 6단계: 정렬
+            { $sort: { date: -1, revenue: -1 } }
+
+        ]).toArray();
+
+        res.json({ success: true, report: report });
 
     } catch (error) {
-        console.error('집계표 조회 오류:', error);
-        res.status(500).json({ success: false, message: '데이터 조회 실패' });
+        console.error('데이터 조회 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
     }
 });
-
-
-
 
 
 
