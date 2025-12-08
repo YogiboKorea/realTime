@@ -1391,6 +1391,146 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
     }
 });
 
+//해당위치에 추가
+
+
+
+// =========================================================
+// [신규 섹션] 실시간 매출 집계 및 엑셀 연동 API (sales 컬렉션 사용)
+// =========================================================
+
+// 1. [POST] 판매 등록 (입력용)
+app.post('/api/sales/record', async (req, res) => {
+    try {
+        const { store, amount } = req.body;
+        // sales 컬렉션에 저장 (기존 jwasuCollectionName과 분리하여 관리)
+        await db.collection('sales').insertOne({ 
+            store: store, 
+            amount: parseInt(amount), 
+            createdAt: new Date() 
+        });
+        res.json({ success: true });
+    } catch (e) { 
+        console.error('판매 등록 오류:', e);
+        res.status(500).json({ success: false }); 
+    }
+});
+
+// 2. [GET] 매장 목록 조회 (DB에 존재하는 매장명만 추출)
+app.get('/api/sales/stores', async (req, res) => {
+    try {
+        // sales 컬렉션에서 중복되지 않는 store 목록 가져오기
+        const stores = await db.collection('sales').distinct('store');
+        res.json({ success: true, stores });
+    } catch (e) { 
+        console.error('매장 목록 조회 오류:', e);
+        res.status(500).json({ success: false }); 
+    }
+});
+
+// 3. [GET] 판매 집계표 데이터 조회 (테이블 대시보드용)
+app.get('/api/sales/table', async (req, res) => {
+    try {
+        const { store, startDate, endDate } = req.query;
+        
+        // 날짜 필터 (00:00:00 ~ 23:59:59)
+        const matchQuery = {
+            createdAt: { 
+                $gte: new Date(`${startDate}T00:00:00`), 
+                $lte: new Date(`${endDate}T23:59:59`) 
+            }
+        };
+        
+        // 특정 매장 선택 시
+        if (store && store !== 'all') {
+            matchQuery.store = store;
+        }
+
+        const report = await db.collection('sales').aggregate([
+            { $match: matchQuery },
+            { 
+                $group: {
+                    _id: { 
+                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } }, 
+                        store: "$store" 
+                    },
+                    dailyCount: { $sum: "$amount" } // 수량 합계
+                }
+            },
+            { $sort: { "_id.date": -1, "_id.store": 1 } } // 최신 날짜순 정렬
+        ]).toArray();
+
+        res.json({ success: true, report });
+    } catch (e) { 
+        console.error('집계표 조회 오류:', e);
+        res.status(500).json({ success: false }); 
+    }
+});
+
+// 4. [GET] 실시간 카운트 (전체 합계)
+app.get('/api/sales/live-count', async (req, res) => {
+    try {
+        const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+        
+        // 오늘 날짜 전체 판매량 합산 (aggregate 사용이 더 정확함)
+        const result = await db.collection('sales').aggregate([
+            { $match: { createdAt: { $gte: todayStart } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]).toArray();
+
+        const total = result.length > 0 ? result[0].total : 0;
+        res.json({ success: true, totalCount: total, lastUpdated: new Date() });
+    } catch (e) { 
+        console.error('실시간 카운트 오류:', e);
+        res.status(500).json({ success: false }); 
+    }
+});
+
+// 5. [POST] 엑셀 대량 업로드 (Import)
+app.post('/api/sales/import', async (req, res) => {
+    try {
+        const { salesData } = req.body;
+
+        if (!salesData || salesData.length === 0) {
+            return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
+        }
+
+        // 엑셀 데이터를 DB 스키마에 맞춰 변환
+        const docs = salesData.map(item => ({
+            store: item.store,
+            amount: parseInt(item.amount),
+            createdAt: new Date(item.date), // 엑셀의 날짜 문자열을 Date 객체로 변환
+            source: 'excel_import' // 구분을 위해 소스 표시
+        }));
+
+        // 대량 저장 (insertMany)
+        const result = await db.collection('sales').insertMany(docs);
+
+        res.json({ success: true, count: result.insertedCount });
+    } catch (e) {
+        console.error('엑셀 업로드 오류:', e);
+        res.status(500).json({ success: false });
+    }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==========================================
 // [섹션 D] Cafe24 쇼핑몰 매니저 관리 API
 // ==========================================
