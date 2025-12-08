@@ -1490,8 +1490,7 @@ app.get('/api/sales/live-count', async (req, res) => {
         console.error('실시간 카운트 오류:', e);
         res.status(500).json({ success: false }); 
     }
-});
-// 5. [GET] 상세 집계표 조회 (좌수 + 매출 병합 버전)
+});// 5. [GET] 상세 집계표 조회 (좌수/매출 완벽 병합 버전)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1508,14 +1507,14 @@ app.get('/api/jwasu/table', async (req, res) => {
             jwasuQuery.storeName = { $in: targetStores };
         }
 
-        // 3. 좌수 데이터 가져오기 (jwasu 컬렉션)
+        // 3. 좌수 데이터 가져오기 (jwasu 컬렉션 - 버튼 클릭)
         const jwasuCollection = db.collection(jwasuCollectionName);
         const jwasuRecords = await jwasuCollection.find(jwasuQuery).toArray();
 
-        // 4. 매출 데이터 가져오기 (sales 컬렉션 - 엑셀 데이터)
-        // 날짜 포맷이 다르므로 범위로 검색 (ISO Date)
-        const salesCollection = db.collection('sales'); // 컬렉션 이름 확인 필요 (app.js와 동일해야 함)
+        // 4. 매출 데이터 가져오기 (sales 컬렉션 - 엑셀 업로드)
+        const salesCollection = db.collection('sales');
         
+        // 날짜 범위 설정 (UTC 기준 변환)
         const salesQuery = {
             createdAt: { 
                 $gte: new Date(`${startDate}T00:00:00.000Z`), 
@@ -1528,11 +1527,10 @@ app.get('/api/jwasu/table', async (req, res) => {
 
         const salesRecords = await salesCollection.find(salesQuery).toArray();
 
-        // 5. 데이터 병합 (날짜 + 매장명 기준)
-        // 먼저 좌수 데이터를 기준으로 맵을 만듭니다.
+        // 5. 데이터 병합 (Merge Logic)
         const mergedData = {};
 
-        // (1) 좌수 데이터 넣기
+        // (Step 1) 좌수 데이터를 먼저 맵에 넣습니다.
         jwasuRecords.forEach(rec => {
             const key = `${rec.date}|${rec.storeName}`;
             if (!mergedData[key]) {
@@ -1545,34 +1543,30 @@ app.get('/api/jwasu/table', async (req, res) => {
                 };
             }
             mergedData[key].count += rec.count;
-            // 매니저 정보는 좌수 데이터에만 있으므로 덮어씌움
-            if (rec.managerName) mergedData[key].managerName = rec.managerName;
         });
 
-        // (2) 매출 데이터 합치기
+        // (Step 2) 엑셀 매출 데이터를 맵에 합칩니다. (좌수가 없어도 생성!)
         salesRecords.forEach(rec => {
-            // ISO 날짜를 YYYY-MM-DD 문자열로 변환 (Timezone 고려)
-            // 여기서는 간단히 문자열 앞부분만 자름 (데이터가 00:00:00Z로 저장되므로)
-            const dateStr = rec.createdAt.toISOString().split('T')[0];
+            // MongoDB의 Date 객체를 YYYY-MM-DD 문자열로 변환 (한국 시간 기준)
+            const dateStr = moment(rec.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
             const key = `${dateStr}|${rec.store}`;
 
             if (!mergedData[key]) {
-                // 좌수는 없는데 매출만 있는 경우 (엑셀만 올린 날)
+                // ★ [핵심] 좌수 기록이 없는 날짜/매장이라도 매출이 있으면 데이터를 만듭니다.
                 mergedData[key] = {
                     date: dateStr,
                     storeName: rec.store,
-                    managerName: '미지정', // 매출만 있으면 매니저 정보 모름
-                    count: 0,
+                    managerName: '미지정', // 엑셀엔 매니저 정보가 없으므로
+                    count: 0, // 좌수는 0으로 설정
                     sales: 0
                 };
             }
-            // 매출액 누적 (혹시 중복 데이터가 있으면 합산)
-            mergedData[key].sales += (rec.revenue || 0); 
+            // 매출액 합산 (revenue 필드 사용)
+            mergedData[key].sales += (rec.revenue || 0);
         });
 
-        // 6. 배열로 변환 및 정렬
+        // 6. 배열로 변환 및 정렬 (날짜 내림차순, 매장 오름차순)
         const report = Object.values(mergedData).sort((a, b) => {
-            // 날짜 내림차순 -> 매장 오름차순
             if (a.date !== b.date) return b.date.localeCompare(a.date);
             return a.storeName.localeCompare(b.storeName);
         });
@@ -1584,10 +1578,6 @@ app.get('/api/jwasu/table', async (req, res) => {
         res.status(500).json({ success: false, message: '데이터 조회 실패' });
     }
 });
-
-
-
-
 
 
 
