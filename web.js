@@ -1285,7 +1285,7 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 매장별 좌수 + 매출 + 매니저 강제 병합 API (디버깅 강화판)
+// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (Full Outer Join)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1296,104 +1296,125 @@ app.get('/api/jwasu/table', async (req, res) => {
         const end = endDate ? new Date(endDate) : new Date();
         end.setHours(23, 59, 59, 999);
 
-        // 2. [매출 데이터] 가져오기
+        // ===============================================
+        // A. 데이터 준비 (매출, 좌수, 매니저 각각 조회)
+        // ===============================================
+
+        // A-1. [매출 데이터] 조회
         let salesQuery = {
             createdAt: { $gte: start, $lte: end }
         };
         if (store && store !== 'all') {
             salesQuery.store = { $in: store.split(',') };
         }
+        const salesData = await db.collection('sales').find(salesQuery).toArray();
 
-        const salesData = await db.collection('sales').find(salesQuery).sort({ createdAt: -1 }).toArray();
-
-        // 3. [매니저 데이터] 가져오기 & 맵핑 (공백 제거 로직 추가)
-        const managerList = await db.collection('managers').find().toArray();
+        // A-2. [좌수 데이터] 조회
+        // 문자열 날짜 비교를 위해 moment 변환
+        const startStr = moment(start).tz('Asia/Seoul').format('YYYY-MM-DD');
+        const endStr = moment(end).tz('Asia/Seoul').format('YYYY-MM-DD');
         
-        // ★ 디버깅용: 매니저 DB에 필드명이 뭔지 확인하기 위해 로그 출력
-        if (managerList.length > 0) {
-            console.log('📌 [디버깅] 매니저 DB 첫번째 데이터 샘플:', managerList[0]);
-        } else {
-            console.log('⚠️ [경고] managers 컬렉션이 비어있습니다!');
+        let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
+        if (store && store !== 'all') {
+            jwasuQuery.storeName = { $in: store.split(',') };
         }
+        const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).toArray();
 
+        // A-3. [매니저 데이터] 조회
+        const managerList = await db.collection('managers').find().toArray();
+
+        // ===============================================
+        // B. 데이터 맵핑 (Map 만들기)
+        // ===============================================
+
+        // B-1. 매니저 Map { "매장명": "매니저이름" }
         const managerMap = {};
         managerList.forEach(m => {
-            // 필드명이 mall_id 인지 storeName 인지 확실치 않아 둘 다 체크합니다.
-            // DB에 저장된 매장명 키 (없으면 패스)
-            let rawKey = m.mall_id || m.storeName || m.store; 
-            
-            // DB에 저장된 매니저 이름 (client_id, managerName, name 중 있는거 씀)
-            let rawValue = m.client_id || m.managerName || m.name || '이름없음';
-
-            if (rawKey) {
-                // 비교 정확도를 위해 앞뒤 공백 제거 (Trim)
-                managerMap[rawKey.trim()] = rawValue;
-            }
+            const key = m.mall_id || m.storeName || m.store;
+            const val = m.client_id || m.managerName || m.name;
+            if (key) managerMap[key.trim()] = val;
         });
 
-        // 4. [좌수 데이터] 가져오기
-        const startStr = moment(start).format('YYYY-MM-DD');
-        const endStr = moment(end).format('YYYY-MM-DD');
-        
-        const jwasuList = await db.collection(jwasuCollectionName).find({
-             date: { $gte: startStr, $lte: endStr }
-        }).toArray();
+        // B-2. 매출 Map { "매장명|날짜": 매출객체 }
+        const salesMap = {};
+        salesData.forEach(s => {
+            const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
+            const storeName = s.store ? s.store.trim() : '알수없음';
+            const key = `${storeName}|${dateStr}`;
+            
+            // 하루에 여러 건일 수 있으므로 합산 처리
+            if (!salesMap[key]) salesMap[key] = { revenue: 0, _id: s._id };
+            salesMap[key].revenue += (s.revenue || 0);
+        });
 
+        // B-3. 좌수 Map { "매장명|날짜": 카운트 }
         const jwasuMap = {};
         jwasuList.forEach(j => {
-            const dateKey = j.date; 
-            const storeKey = j.storeName; 
-            if (dateKey && storeKey) {
-                // 여기도 공백 제거
-                jwasuMap[`${storeKey.trim()}|${dateKey}`] = j.count;
-            }
+            const storeName = j.storeName ? j.storeName.trim() : '알수없음';
+            const key = `${storeName}|${j.date}`; // j.date는 이미 YYYY-MM-DD 문자열
+            jwasuMap[key] = j.count;
         });
 
-        // 5. [데이터 조립]
-        let matchFailCount = 0; // 매칭 실패 횟수 카운트
+        // ===============================================
+        // C. 데이터 통합 (합집합 만들기)
+        // ===============================================
 
-        const report = salesData.map(sale => {
-            const dateStr = moment(sale.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
+        // 매출이나 좌수 데이터가 하나라도 있는 "매장|날짜" 키를 모두 수집
+        const allKeys = new Set([
+            ...Object.keys(salesMap),
+            ...Object.keys(jwasuMap)
+        ]);
+
+        // 통합 리스트 생성
+        const report = Array.from(allKeys).map(key => {
+            const [storeName, dateStr] = key.split('|');
+
+            // 1. 매출 정보 가져오기 (없으면 0)
+            const salesInfo = salesMap[key] || { revenue: 0, _id: null };
             
-            // ★ 중요: 매출 데이터의 매장명도 공백 제거
-            const rawStoreName = sale.store || '';
-            const storeName = rawStoreName.trim();
+            // 2. 좌수 정보 가져오기 (없으면 0)
+            const countInfo = jwasuMap[key] || 0;
 
-            // 1) 매니저 찾기
-            const foundManager = managerMap[storeName];
-
-            // 디버깅: 매니저를 못 찾았으면 로그를 찍음 (너무 많으니 앞 5개만)
-            if (!foundManager && matchFailCount < 5) {
-                console.log(`⚠️ 매니저 매칭 실패! Sales 매장명: [${storeName}] vs Managers 키 목록 예시: [${Object.keys(managerMap).slice(0, 3).join(', ')}]`);
-                matchFailCount++;
-            }
-
-            // 2) 좌수 찾기
-            const foundCount = jwasuMap[`${storeName}|${dateStr}`] || 0;
+            // 3. 매니저 정보 가져오기
+            const managerName = managerMap[storeName] || '미지정';
 
             return {
-                _id: sale._id,
+                _id: salesInfo._id || `temp_${key}`, // ID가 없으면 임시 ID 생성
                 date: dateStr,
                 storeName: storeName,
                 store: storeName,
-                revenue: sale.revenue || 0,
-                sales: sale.revenue || 0,
-                amount: foundCount,
-                count: foundCount,
-                managerName: foundManager || '미지정' 
+                
+                // 매출 (DB에 없으면 0원)
+                revenue: salesInfo.revenue,
+                sales: salesInfo.revenue,
+
+                // 좌수 (DB에 없으면 0건)
+                amount: countInfo,
+                count: countInfo,
+
+                managerName: managerName
             };
         });
 
-        console.log(`✅ [API 결과] 총 ${report.length}건 조회됨. (매니저 매칭 실패: ${matchFailCount}건 이상)`);
+        // ===============================================
+        // D. 정렬 및 반환
+        // ===============================================
+
+        // 날짜 최신순 -> 매장명 가나다순 정렬
+        report.sort((a, b) => {
+            if (a.date !== b.date) return b.date.localeCompare(a.date);
+            return a.storeName.localeCompare(b.storeName);
+        });
+
+        console.log(`✅ [API 결과] 총 ${report.length}건 병합 완료 (오늘 데이터 포함)`);
         
         res.json({ success: true, report: report });
 
     } catch (error) {
-        console.error('데이터 조립 중 오류:', error);
+        console.error('데이터 병합 중 오류:', error);
         res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
-
 // 6. [GET] 월별 히스토리 (매장+매니저 기준)
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
