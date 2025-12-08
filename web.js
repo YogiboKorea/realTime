@@ -1187,6 +1187,9 @@ app.get('/api/jwasu/stores', (req, res) => {
 });
 
 // 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (덮어쓰기 버그 수정판)
+// ==========================================
+// [섹션 C 수정] 통합 데이터 조회 API (리스트 방식)
+// ==========================================
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1198,84 +1201,78 @@ app.get('/api/jwasu/table', async (req, res) => {
         end.setHours(23, 59, 59, 999);
 
         // ===============================================
-        // A. 데이터 조회 (DB에서 다 가져오기)
+        // A. 데이터 조회 (매출, 좌수, 매니저)
         // ===============================================
 
         // A-1. [매출] 조회
         let salesQuery = { createdAt: { $gte: start, $lte: end } };
         if (store && store !== 'all') { salesQuery.store = { $in: store.split(',') }; }
-        const salesData = await db.collection('sales').find(salesQuery).toArray();
+        const salesData = await db.collection('sales').find(salesQuery).sort({ createdAt: -1 }).toArray();
 
         // A-2. [좌수] 조회
         const startStr = moment(start).tz('Asia/Seoul').format('YYYY-MM-DD');
         const endStr = moment(end).tz('Asia/Seoul').format('YYYY-MM-DD');
-        
         let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
         if (store && store !== 'all') { jwasuQuery.storeName = { $in: store.split(',') }; }
-        const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).toArray();
+        const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).sort({ date: -1 }).toArray();
 
-        // A-3. [매니저 목록] (백업용 이름 찾기)
+        // A-3. [매니저 목록] 조회 (이름 매칭용)
         const managerList = await db.collection('managers').find().toArray();
 
         // ===============================================
-        // B. 데이터 맵핑 (이름 연결용 사전 만들기)
+        // B. 매니저 이름 사전 만들기 (Map)
         // ===============================================
-
         const managerListMap = {};
         managerList.forEach(m => {
             const rawKey = m.mall_id || m.storeName || m.store;
             const val = m.client_id || m.managerName || m.name;
             if (rawKey && val) {
+                // 공백 제거 매칭 ("롯데 강남" == "롯데강남")
                 const cleanKey = String(rawKey).replace(/\s+/g, '');
                 managerListMap[cleanKey] = val;
             }
         });
 
         // ===============================================
-        // C. 데이터 통합 (★ 핵심 수정: 리스트 방식으로 변경)
+        // C. 데이터 단순 나열 (병합은 프론트엔드에서 함)
         // ===============================================
-        // 맵(Map)을 써서 합치면 덮어씌워지므로, 그냥 리스트에 다 넣습니다.
-        
         const report = [];
 
-        // 1. 좌수 데이터 넣기 (같은 날짜에 매니저가 여러 명이면 여러 줄이 들어감)
+        // 1. 좌수 데이터 추가
         jwasuList.forEach(j => {
             let mgrName = j.managerName;
-            
-            // 만약 좌수 데이터에 매니저 이름이 없으면(옛날 데이터), DB 목록에서 찾아봅니다.
+            // 저장된 이름이 없거나 미지정이면, 매니저 목록에서 찾아 채워넣기
             if (!mgrName || mgrName === '미지정') {
                 const lookupKey = String(j.storeName).replace(/\s+/g, '');
                 mgrName = managerListMap[lookupKey] || '미지정';
             }
-
             report.push({
-                type: 'jwasu', // 구분용
+                type: 'jwasu',
                 date: j.date,
                 storeName: j.storeName,
                 managerName: mgrName,
                 count: j.count || 0,
-                revenue: 0 // 좌수 데이터엔 매출 없음
+                revenue: 0 
             });
         });
 
-        // 2. 매출 데이터 넣기 (매출은 매니저 구분이 보통 없으므로 '미지정' 혹은 별도 표기)
+        // 2. 매출 데이터 추가
         salesData.forEach(s => {
             const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
             report.push({
                 type: 'sales',
                 date: dateStr,
                 storeName: s.store,
-                managerName: '매출집계', // 매출 행임을 표시
+                managerName: '매출집계', 
                 count: 0,
                 revenue: s.revenue || 0
             });
         });
 
-        // 결과 반환 (프론트엔드에서 이걸 받아서 그룹화함)
         res.json({ success: true, report: report });
 
     } catch (error) {
-        console.error('데이터 병합 중 오류:', error);
+        console.error('데이터 조회 중 오류:', error);
         res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
