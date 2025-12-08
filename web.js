@@ -1558,46 +1558,18 @@ app.get('/api/sales/live-count', async (req, res) => {
         res.status(500).json({ success: false }); 
     }
 });
-// [GET] 통합 데이터 조회 API (매칭 로직 강화 버전)
-// [GET] 통합 데이터 조회 API (진단 모드)
+// [GET] 통합 데이터 조회 API (필드명 매칭 수정 완료)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
-        console.log("============== [진단 시작] ==============");
-
-        // 1. 컬렉션 이름 확인
-        // (사용자분이 'jwasu'라고 하셨지만, 실제로는 'seats', 'seat_count' 등일 수 있습니다.)
-        const salesCol = db.collection('sales');     // 매출 DB
-        const managerCol = db.collection('managers'); // 매니저 DB
-        // ★ 중요: 여기 이름을 실제 좌수 DB 컬렉션 이름으로 바꿔야 합니다.
-        // 만약 모르시겠다면, 일단 'jwasu'로 두고 아래 로그를 보세요.
-        const jwasuCol = db.collection('jwasu');      
-
-        // 2. 각 DB에서 샘플 데이터 1개씩 꺼내서 로그 찍기
-        const saleSample = await salesCol.findOne();
-        const mgrSample = await managerCol.findOne();
-        const jwasuSample = await jwasuCol.findOne();
-
-        console.log(">> 1. 매출(Sales) 데이터 샘플:");
-        console.log(saleSample);
-        
-        console.log(">> 2. 매니저(Managers) 데이터 샘플:");
-        console.log(mgrSample);
-
-        console.log(">> 3. 좌수(Jwasu) 데이터 샘플:");
-        console.log(jwasuSample); // ★ 여기가 null이면 컬렉션 이름이 틀린 겁니다!
-
-        console.log("========================================");
-
-        // ----------------------------------------------------
-        // 아래는 기존 로직 그대로 실행 (로그 확인 후 수정할 예정)
-        // ----------------------------------------------------
-        
         const { store, startDate, endDate } = req.query;
+
+        // 1. 날짜 범위 설정
         const start = startDate ? new Date(startDate) : new Date();
         start.setHours(0, 0, 0, 0);
         const end = endDate ? new Date(endDate) : new Date();
         end.setHours(23, 59, 59, 999);
 
+        // 2. 기본 매칭 조건 (매출 데이터 기준)
         let matchQuery = {
             createdAt: { $gte: start, $lte: end },
             source: 'excel_import' 
@@ -1608,34 +1580,43 @@ app.get('/api/jwasu/table', async (req, res) => {
             matchQuery.store = { $in: storeNames };
         }
 
-        const report = await salesCol.aggregate([
+        const collection = db.collection('sales'); 
+
+        const report = await collection.aggregate([
+            // ------------------------------------------------
+            // 1단계: 매출 데이터(Sales) 찾기
+            // ------------------------------------------------
             { $match: matchQuery },
+
+            // ------------------------------------------------
+            // 2단계: 날짜 변환 ("2025-12-06" 문자열로 만들기)
+            // ------------------------------------------------
             {
                 $addFields: {
                     dateStr: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } }
                 }
             },
+
+            // ------------------------------------------------
+            // 3단계: ★ 좌수 데이터(Jwasu) 연결 (여기가 핵심!)
+            // ------------------------------------------------
             {
                 $lookup: {
-                    from: 'managers', 
-                    localField: 'store', 
-                    foreignField: 'mall_id', 
-                    as: 'managerInfo'
-                }
-            },
-            { $unwind: { path: '$managerInfo', preserveNullAndEmptyArrays: true } },
-            {
-                $lookup: {
-                    from: 'jwasu', // ★ 컬렉션 이름 확인 필수
-                    let: { currentStore: '$store', currentDate: '$dateStr' },
+                    from: 'jwasu', // [체크] 실제 컬렉션 이름이 'jwasu'가 맞는지 확인 필요
+                    let: { 
+                        currentStore: '$store', 
+                        currentDate: '$dateStr' 
+                    },
                     pipeline: [
                         {
                             $match: {
                                 $expr: {
                                     $and: [
-                                        { $eq: ['$store', '$$currentStore'] },
-                                        // 날짜 비교 (DB 형식에 따라 수정 필요할 수 있음)
-                                        { $eq: ['$date', '$$currentDate'] } 
+                                        // ★ [수정됨] 팝업에서 본대로 'storeName'으로 매칭
+                                        { $eq: ['$storeName', '$$currentStore'] }, 
+                                        
+                                        // ★ [수정됨] 팝업에서 본대로 'date'로 매칭
+                                        { $eq: ['$date', '$$currentDate'] }    
                                     ]
                                 }
                             }
@@ -1644,19 +1625,51 @@ app.get('/api/jwasu/table', async (req, res) => {
                     as: 'jwasuInfo'
                 }
             },
+            // 배열 껍질 벗기기 (데이터가 없어도 null로 유지)
             { $unwind: { path: '$jwasuInfo', preserveNullAndEmptyArrays: true } },
+
+            // ------------------------------------------------
+            // 4단계: 매니저 정보 연결 (보조 수단)
+            // 좌수 DB에 매니저 이름이 없을 경우를 대비해 managers 컬렉션도 한번 훑습니다.
+            // ------------------------------------------------
+            {
+                $lookup: {
+                    from: 'managers',
+                    localField: 'store',
+                    foreignField: 'mall_id',
+                    as: 'managerInfo'
+                }
+            },
+            { $unwind: { path: '$managerInfo', preserveNullAndEmptyArrays: true } },
+
+            // ------------------------------------------------
+            // 5단계: 최종 데이터 조립 ($project)
+            // ------------------------------------------------
             {
                 $project: {
                     _id: 1,
                     date: '$dateStr',
                     storeName: '$store',
-                    revenue: '$revenue',
+                    
+                    revenue: '$revenue', // 매출
                     sales: '$revenue',
-                    count: { $ifNull: ['$jwasuInfo.count', 0] },     // ★ 필드명 확인 필요
-                    managerName: { $ifNull: ['$managerInfo.client_id', '미지정'] } // ★ 필드명 확인 필요
+
+                    // ★ [수정됨] 좌수 DB의 'count' 필드 사용
+                    count: { $ifNull: ['$jwasuInfo.count', 0] },
+
+                    // ★ [수정됨] 우선순위: 좌수DB의 managerName -> 없으면 매니저DB -> 없으면 '미지정'
+                    managerName: { 
+                        $ifNull: [
+                            '$jwasuInfo.managerName', 
+                            { $ifNull: ['$managerInfo.client_id', '미지정'] }
+                        ] 
+                    }
                 }
             },
+
+            // 6단계: 정렬 (날짜 내림차순)
             { $sort: { date: -1, revenue: -1 } }
+
         ]).toArray();
 
         res.json({ success: true, report: report });
@@ -1666,7 +1679,6 @@ app.get('/api/jwasu/table', async (req, res) => {
         res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
-
 
 // ==========================================
 // [섹션 D] Cafe24 쇼핑몰 매니저 관리 API
