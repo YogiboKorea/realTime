@@ -1428,12 +1428,11 @@ app.get('/api/sales/stores', async (req, res) => {
     }
 });
 
-// 3. [GET] 판매 집계표 데이터 조회 (테이블 대시보드용)
+// 3. [GET] 판매 집계표 데이터 조회 (수정: 매출액 revenue 포함)
 app.get('/api/sales/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
         
-        // 날짜 필터 (00:00:00 ~ 23:59:59)
         const matchQuery = {
             createdAt: { 
                 $gte: new Date(`${startDate}T00:00:00`), 
@@ -1441,7 +1440,6 @@ app.get('/api/sales/table', async (req, res) => {
             }
         };
         
-        // 특정 매장 선택 시
         if (store && store !== 'all') {
             matchQuery.store = store;
         }
@@ -1454,19 +1452,27 @@ app.get('/api/sales/table', async (req, res) => {
                         date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } }, 
                         store: "$store" 
                     },
-                    dailyCount: { $sum: "$amount" } // 수량 합계
+                    // ★ [핵심] 두 가지를 따로 더합니다!
+                    dailyCount: { $sum: "$amount" },   // 버튼 클릭 수 (좌수)
+                    dailyRevenue: { $sum: "$revenue" } // 엑셀 매출액 (원)
                 }
             },
-            { $sort: { "_id.date": -1, "_id.store": 1 } } // 최신 날짜순 정렬
+            { $sort: { "_id.date": -1, "_id.store": 1 } } 
         ]).toArray();
 
-        res.json({ success: true, report });
+        // 결과 가공 (null 값 처리)
+        const cleanReport = report.map(r => ({
+            _id: r._id,
+            dailyCount: r.dailyCount || 0,
+            dailyRevenue: r.dailyRevenue || 0
+        }));
+
+        res.json({ success: true, report: cleanReport });
     } catch (e) { 
         console.error('집계표 조회 오류:', e);
         res.status(500).json({ success: false }); 
     }
 });
-
 // 4. [GET] 실시간 카운트 (전체 합계)
 app.get('/api/sales/live-count', async (req, res) => {
     try {
