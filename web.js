@@ -1186,8 +1186,7 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (★ 핵심 수정됨)
-// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (수정: 저장된 이름 우선 사용)
+// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (덮어쓰기 버그 수정판)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1199,32 +1198,32 @@ app.get('/api/jwasu/table', async (req, res) => {
         end.setHours(23, 59, 59, 999);
 
         // ===============================================
-        // A. 데이터 조회
+        // A. 데이터 조회 (DB에서 다 가져오기)
         // ===============================================
 
-        // A-1. [매출]
+        // A-1. [매출] 조회
         let salesQuery = { createdAt: { $gte: start, $lte: end } };
         if (store && store !== 'all') { salesQuery.store = { $in: store.split(',') }; }
         const salesData = await db.collection('sales').find(salesQuery).toArray();
 
-        // A-2. [좌수]
+        // A-2. [좌수] 조회
         const startStr = moment(start).tz('Asia/Seoul').format('YYYY-MM-DD');
         const endStr = moment(end).tz('Asia/Seoul').format('YYYY-MM-DD');
+        
         let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
         if (store && store !== 'all') { jwasuQuery.storeName = { $in: store.split(',') }; }
         const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).toArray();
 
-        // A-3. [매니저 목록] (백업용)
+        // A-3. [매니저 목록] (백업용 이름 찾기)
         const managerList = await db.collection('managers').find().toArray();
 
         // ===============================================
-        // B. 데이터 맵핑
+        // B. 데이터 맵핑 (이름 연결용 사전 만들기)
         // ===============================================
 
-        // B-1. 매니저 목록 Map (매칭 실패 시 비상용)
         const managerListMap = {};
         managerList.forEach(m => {
-            const rawKey = m.mall_id || m.storeName || m.store || m.shop_name;
+            const rawKey = m.mall_id || m.storeName || m.store;
             const val = m.client_id || m.managerName || m.name;
             if (rawKey && val) {
                 const cleanKey = String(rawKey).replace(/\s+/g, '');
@@ -1232,77 +1231,47 @@ app.get('/api/jwasu/table', async (req, res) => {
             }
         });
 
-        // B-2. 매출 Map
-        const salesMap = {};
-        salesData.forEach(s => {
-            const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
-            const rawStore = s.store || '알수없음';
-            const key = `${rawStore}|${dateStr}`;
-            
-            if (!salesMap[key]) salesMap[key] = { revenue: 0, _id: s._id };
-            salesMap[key].revenue += (s.revenue || 0);
-        });
+        // ===============================================
+        // C. 데이터 통합 (★ 핵심 수정: 리스트 방식으로 변경)
+        // ===============================================
+        // 맵(Map)을 써서 합치면 덮어씌워지므로, 그냥 리스트에 다 넣습니다.
+        
+        const report = [];
 
-        // B-3. 좌수 Map (★중요: 여기서 매니저 이름도 같이 저장)
-        const jwasuMap = {};
+        // 1. 좌수 데이터 넣기 (같은 날짜에 매니저가 여러 명이면 여러 줄이 들어감)
         jwasuList.forEach(j => {
-            const rawStore = j.storeName || '알수없음';
-            const key = `${rawStore}|${j.date}`;
-            // 카운트와 "당시 저장된 매니저 이름"을 함께 보관
-            jwasuMap[key] = {
-                count: j.count,
-                savedManagerName: j.managerName // 이게 핵심!
-            };
-        });
-
-        // ===============================================
-        // C. 데이터 통합
-        // ===============================================
-
-        const allKeys = new Set([ ...Object.keys(salesMap), ...Object.keys(jwasuMap) ]);
-
-        const report = Array.from(allKeys).map(key => {
-            const [storeName, dateStr] = key.split('|');
-
-            const salesInfo = salesMap[key] || { revenue: 0, _id: null };
+            let mgrName = j.managerName;
             
-            // 좌수 데이터 가져오기
-            const jwasuInfo = jwasuMap[key] || { count: 0, savedManagerName: null };
-
-            // ★ 매니저 결정 로직 (우선순위 적용)
-            let finalManagerName = '미지정';
-
-            // 1순위: 좌수 데이터에 이미 저장된 이름이 있으면 그걸 쓴다. (대시보드와 동일하게)
-            if (jwasuInfo.savedManagerName && jwasuInfo.savedManagerName !== '미지정') {
-                finalManagerName = jwasuInfo.savedManagerName;
-            } 
-            // 2순위: 없다면 매니저 목록(DB)에서 찾아본다.
-            else {
-                let lookupKey = String(storeName).replace(/\s+/g, '');
-                if (managerListMap[lookupKey]) {
-                    finalManagerName = managerListMap[lookupKey];
-                }
+            // 만약 좌수 데이터에 매니저 이름이 없으면(옛날 데이터), DB 목록에서 찾아봅니다.
+            if (!mgrName || mgrName === '미지정') {
+                const lookupKey = String(j.storeName).replace(/\s+/g, '');
+                mgrName = managerListMap[lookupKey] || '미지정';
             }
 
-            return {
-                _id: salesInfo._id || `temp_${key}`,
+            report.push({
+                type: 'jwasu', // 구분용
+                date: j.date,
+                storeName: j.storeName,
+                managerName: mgrName,
+                count: j.count || 0,
+                revenue: 0 // 좌수 데이터엔 매출 없음
+            });
+        });
+
+        // 2. 매출 데이터 넣기 (매출은 매니저 구분이 보통 없으므로 '미지정' 혹은 별도 표기)
+        salesData.forEach(s => {
+            const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
+            report.push({
+                type: 'sales',
                 date: dateStr,
-                storeName: storeName,
-                store: storeName,
-                revenue: salesInfo.revenue,
-                sales: salesInfo.revenue,
-                amount: jwasuInfo.count,
-                count: jwasuInfo.count,
-                managerName: finalManagerName // 최종 결정된 이름
-            };
+                storeName: s.store,
+                managerName: '매출집계', // 매출 행임을 표시
+                count: 0,
+                revenue: s.revenue || 0
+            });
         });
 
-        // 정렬
-        report.sort((a, b) => {
-            if (a.date !== b.date) return b.date.localeCompare(a.date);
-            return a.storeName.localeCompare(b.storeName);
-        });
-
+        // 결과 반환 (프론트엔드에서 이걸 받아서 그룹화함)
         res.json({ success: true, report: report });
 
     } catch (error) {
