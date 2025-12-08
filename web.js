@@ -1285,36 +1285,103 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 상세 집계표 조회 (다중 매장 선택 지원 수정됨)
+
+
+// [GET] 매장별 좌수 및 매출 집계표 조회 (Aggregation Join 적용)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
+        // 1. 프론트에서 보낸 파라미터 받기
         const { store, startDate, endDate } = req.query;
 
-        const query = {
-            date: { $gte: startDate, $lte: endDate }
+        // 2. 날짜 필터 생성 (00:00:00 ~ 23:59:59)
+        // startDate가 없으면 오늘 날짜로 방어 로직
+        const start = startDate ? new Date(startDate) : new Date();
+        start.setHours(0, 0, 0, 0);
+
+        const end = endDate ? new Date(endDate) : new Date();
+        end.setHours(23, 59, 59, 999);
+
+        // 3. 기본 검색 조건 ($match) 설정
+        let matchQuery = {
+            createdAt: { 
+                $gte: start, 
+                $lte: end 
+            }
         };
 
-        // [수정] 다중 선택 처리 로직
+        // 매장 선택이 'all'이 아니고, 특정 매장들이 선택된 경우 필터 추가
         if (store && store !== 'all') {
-            // 콤마(,)로 구분된 문자열을 배열로 변환 (예: "매장A,매장B" -> ["매장A", "매장B"])
-            const storeList = store.split(',');
-            
-            // MongoDB $in 연산자를 사용하여 배열에 포함된 매장만 검색
-            query.storeName = { $in: storeList };
+            const storeNames = store.split(','); // "강남점,홍대점" -> ["강남점", "홍대점"]
+            matchQuery.store = { $in: storeNames };
         }
 
-        const collection = db.collection(jwasuCollectionName);
-        const report = await collection.find(query)
-            .sort({ date: -1, storeName: 1, managerName: 1 })
-            .toArray();
+        // 4. DB 집계 파이프라인 실행
+        // (sales 컬렉션 이름이 'sales'라고 가정합니다. app.js에 그렇게 되어있음)
+        const collection = db.collection('sales'); 
 
-        res.json({ success: true, report });
+        const report = await collection.aggregate([
+            // 4-1. 날짜 및 매장 조건으로 1차 필터링
+            { $match: matchQuery },
+
+            // 4-2. 매니저 정보 가져오기 (Join)
+            // sales.store와 managers.mall_id가 같은 것을 찾음
+            {
+                $lookup: {
+                    from: 'managers',         // 매니저 컬렉션 이름 (확인 필요)
+                    localField: 'store',      // sales 컬렉션의 매장명 필드
+                    foreignField: 'mall_id',  // managers 컬렉션의 매장명 필드
+                    as: 'managerInfo'         // 결과를 managerInfo라는 배열로 임시 저장
+                }
+            },
+
+            // 4-3. 매니저 정보 배열 풀기 (매칭 안돼도 데이터 유지: preserveNullAndEmptyArrays)
+            {
+                $unwind: {
+                    path: '$managerInfo',
+                    preserveNullAndEmptyArrays: true 
+                }
+            },
+
+            // 4-4. 프론트엔드가 쓰기 편하게 이름 정리 ($project)
+            {
+                $project: {
+                    _id: 1,
+                    // 날짜를 "2025-12-06" 형태로 변환
+                    date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    
+                    // 매장명 (DB필드: store)
+                    storeName: '$store',
+                    store: '$store', // 혹시 몰라 둘 다 보냄
+
+                    // 매출 (DB필드: revenue -> 프론트: revenue/sales)
+                    revenue: '$revenue',
+                    sales: '$revenue', 
+
+                    // 좌수 (DB필드: amount -> 프론트: amount/count)
+                    // ★ 엑셀 업로드 파일(app.js)에서 amount가 0으로 들어간다면 여기도 0으로 나옵니다.
+                    amount: '$amount',
+                    count: '$amount',
+
+                    // 매니저 이름 (매니저 DB의 client_id 필드를 이름으로 사용한다고 가정)
+                    managerName: { $ifNull: ['$managerInfo.client_id', '미지정'] }
+                }
+            },
+
+            // 4-5. 날짜 최신순, 매장명 가나다순 정렬
+            { $sort: { date: -1, storeName: 1 } }
+
+        ]).toArray();
+
+        // 5. 결과 반환
+        res.json({ success: true, report: report });
 
     } catch (error) {
         console.error('집계표 조회 오류:', error);
         res.status(500).json({ success: false, message: '데이터 조회 실패' });
     }
 });
+
+
 
 // 6. [GET] 월별 히스토리 (매장+매니저 기준)
 app.get('/api/jwasu/monthly-history', async (req, res) => {
