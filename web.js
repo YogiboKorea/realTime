@@ -1510,15 +1510,14 @@ app.get('/api/event-winners', async (req, res) => {
       res.status(500).json({ success: false, winners: [] });
     }
 });
-  
-// 2. [이벤트 참여 API]
+  // 2. [이벤트 참여 API]
 app.post('/api/play-event', async (req, res) => {
     try {
       const { userId, isRetry } = req.body; 
   
-      // ★ 테스트 설정
-      const MAX_DAILY_WINNERS = 1000; 
-      const WIN_PROBABILITY_PERCENT = 3; 
+      // ★ 크리스마스 이벤트 확률 데이터 부분
+      const MAX_DAILY_WINNERS = 10; 
+      const WIN_PROBABILITY_PERCENT = 8; 
   
       const PRIZE_COUPON_NO = "1234567890";
       const PRIZE_TARGET_URL = "/product/스퀴지보-애니멀/128/category/222/display/1/";
@@ -1562,10 +1561,10 @@ app.post('/api/play-event', async (req, res) => {
       
       let isWin = false;
       if (dailyWinnerCount < MAX_DAILY_WINNERS) { 
-          const randomVal = Math.random() * 100;
-          if (randomVal < WIN_PROBABILITY_PERCENT) {
-            isWin = true;
-          }
+            const randomVal = Math.random() * 100;
+            if (randomVal < WIN_PROBABILITY_PERCENT) {
+              isWin = true;
+            }
       }
   
       const resultStatus = isWin ? 'win' : 'lose';
@@ -1613,8 +1612,11 @@ app.get('/api/kakao-key', (req, res) => {
     });
 });
 
-//응모하기 이벤트 12월05일
 
+
+
+
+//응모하기 이벤트 12월05일
 // --- [섹션 D] 이벤트 응모 API (단일 참여 제한) ---
 const EVENT_COLLECTION_NAME = 'event_raffle_entries'; 
 const EVENT_PERIOD_START = '2025-12-01'; // 이벤트 시작일 설정
