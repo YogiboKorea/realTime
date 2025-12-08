@@ -1187,6 +1187,7 @@ app.get('/api/jwasu/stores', (req, res) => {
 });
 
 // 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (★ 핵심 수정됨)
+// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (수정: 저장된 이름 우선 사용)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1213,55 +1214,49 @@ app.get('/api/jwasu/table', async (req, res) => {
         if (store && store !== 'all') { jwasuQuery.storeName = { $in: store.split(',') }; }
         const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).toArray();
 
-        // A-3. [매니저]
+        // A-3. [매니저 목록] (백업용)
         const managerList = await db.collection('managers').find().toArray();
 
-        // ★ [디버깅] 매니저 DB 필드 확인용
-        if (managerList.length > 0) {
-            console.log('🔍 [매니저 DB 첫번째 데이터 구조]:', JSON.stringify(managerList[0], null, 2));
-        }
-
         // ===============================================
-        // B. 데이터 맵핑 (강력한 연결 로직)
+        // B. 데이터 맵핑
         // ===============================================
 
-        // ★ [수동 매핑 사전] 이름이 달라서 매칭 안될 때 여기에 추가
-        const manualNameMap = {
-            "현대울산": "현대울산", // 예: "현대울산": "현대백화점 울산점"
-            // "화면매장명": "DB매장명"
-        };
-
-        const managerMap = {};
+        // B-1. 매니저 목록 Map (매칭 실패 시 비상용)
+        const managerListMap = {};
         managerList.forEach(m => {
-            // DB 필드명 후보군 스캔
-            const rawKey = m.mall_id || m.storeName || m.store || m.shop_name || m.mall_name;
-            const val = m.client_id || m.managerName || m.name || m.manager_name || m.user_id;
-
+            const rawKey = m.mall_id || m.storeName || m.store || m.shop_name;
+            const val = m.client_id || m.managerName || m.name;
             if (rawKey && val) {
-                // 공백 완전 제거 ("롯데 강남" -> "롯데강남")
                 const cleanKey = String(rawKey).replace(/\s+/g, '');
-                managerMap[cleanKey] = val;
+                managerListMap[cleanKey] = val;
             }
         });
 
+        // B-2. 매출 Map
         const salesMap = {};
         salesData.forEach(s => {
             const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
             const rawStore = s.store || '알수없음';
             const key = `${rawStore}|${dateStr}`;
+            
             if (!salesMap[key]) salesMap[key] = { revenue: 0, _id: s._id };
             salesMap[key].revenue += (s.revenue || 0);
         });
 
+        // B-3. 좌수 Map (★중요: 여기서 매니저 이름도 같이 저장)
         const jwasuMap = {};
         jwasuList.forEach(j => {
             const rawStore = j.storeName || '알수없음';
             const key = `${rawStore}|${j.date}`;
-            jwasuMap[key] = j.count;
+            // 카운트와 "당시 저장된 매니저 이름"을 함께 보관
+            jwasuMap[key] = {
+                count: j.count,
+                savedManagerName: j.managerName // 이게 핵심!
+            };
         });
 
         // ===============================================
-        // C. 데이터 통합 (Full Outer Join)
+        // C. 데이터 통합
         // ===============================================
 
         const allKeys = new Set([ ...Object.keys(salesMap), ...Object.keys(jwasuMap) ]);
@@ -1270,17 +1265,23 @@ app.get('/api/jwasu/table', async (req, res) => {
             const [storeName, dateStr] = key.split('|');
 
             const salesInfo = salesMap[key] || { revenue: 0, _id: null };
-            const countInfo = jwasuMap[key] || 0;
+            
+            // 좌수 데이터 가져오기
+            const jwasuInfo = jwasuMap[key] || { count: 0, savedManagerName: null };
 
-            // ★ 매니저 찾기 로직
-            // 1. 공백 제거 후 검색
-            let lookupKey = String(storeName).replace(/\s+/g, '');
-            let managerName = managerMap[lookupKey];
+            // ★ 매니저 결정 로직 (우선순위 적용)
+            let finalManagerName = '미지정';
 
-            // 2. 없으면 수동 매핑 사전 확인
-            if (!managerName && manualNameMap[storeName]) {
-                 const dbName = manualNameMap[storeName].replace(/\s+/g, '');
-                 managerName = managerMap[dbName];
+            // 1순위: 좌수 데이터에 이미 저장된 이름이 있으면 그걸 쓴다. (대시보드와 동일하게)
+            if (jwasuInfo.savedManagerName && jwasuInfo.savedManagerName !== '미지정') {
+                finalManagerName = jwasuInfo.savedManagerName;
+            } 
+            // 2순위: 없다면 매니저 목록(DB)에서 찾아본다.
+            else {
+                let lookupKey = String(storeName).replace(/\s+/g, '');
+                if (managerListMap[lookupKey]) {
+                    finalManagerName = managerListMap[lookupKey];
+                }
             }
 
             return {
@@ -1290,9 +1291,9 @@ app.get('/api/jwasu/table', async (req, res) => {
                 store: storeName,
                 revenue: salesInfo.revenue,
                 sales: salesInfo.revenue,
-                amount: countInfo,
-                count: countInfo,
-                managerName: managerName || '미지정'
+                amount: jwasuInfo.count,
+                count: jwasuInfo.count,
+                managerName: finalManagerName // 최종 결정된 이름
             };
         });
 
