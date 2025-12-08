@@ -1186,69 +1186,76 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
-// 5. [GET] 매장별 좌수 + 매출 + 매니저 완벽 병합 API (덮어쓰기 버그 수정판)
 // ==========================================
-// [섹션 C 수정] 통합 데이터 조회 API (리스트 방식)
+// [API 수정] 통합 데이터 조회 (안전성 강화판)
 // ==========================================
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
 
-        // 1. 날짜 범위 설정
-        const start = startDate ? new Date(startDate) : new Date();
-        start.setHours(0, 0, 0, 0);
-        const end = endDate ? new Date(endDate) : new Date();
-        end.setHours(23, 59, 59, 999);
+        // 1. 날짜 처리 (moment 없이 안전하게 변환)
+        // 화면에서 '2025-12-08' 형태로 옴
+        const startStr = startDate; 
+        const endStr = endDate;
+        
+        // 매출 DB 검색용 Date 객체 생성 (00:00:00 ~ 23:59:59)
+        const startObj = new Date(`${startStr}T00:00:00.000Z`); // UTC 기준 보정 필요할 수 있음 (로컬환경에 따라)
+        // 간단하게 한국 시간 보정을 위해 9시간 뺄 수도 있으나, 
+        // 기존 sales 데이터가 한국시간 기준 로컬 Date로 저장된다면 아래처럼 처리
+        const startForSales = new Date(`${startStr}T00:00:00`);
+        const endForSales = new Date(`${endStr}T23:59:59`);
 
         // ===============================================
-        // A. 데이터 조회 (매출, 좌수, 매니저)
+        // A. 데이터 조회
         // ===============================================
 
-        // A-1. [매출] 조회
-        let salesQuery = { createdAt: { $gte: start, $lte: end } };
-        if (store && store !== 'all') { salesQuery.store = { $in: store.split(',') }; }
+        // A-1. [매출] 조회 (Date 객체로 검색)
+        let salesQuery = { createdAt: { $gte: startForSales, $lte: endForSales } };
+        if (store && store !== 'all') { 
+            salesQuery.store = { $in: store.split(',') }; 
+        }
         const salesData = await db.collection('sales').find(salesQuery).sort({ createdAt: -1 }).toArray();
 
-        // A-2. [좌수] 조회
-        const startStr = moment(start).tz('Asia/Seoul').format('YYYY-MM-DD');
-        const endStr = moment(end).tz('Asia/Seoul').format('YYYY-MM-DD');
+        // A-2. [좌수] 조회 (문자열로 검색)
         let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
-        if (store && store !== 'all') { jwasuQuery.storeName = { $in: store.split(',') }; }
+        if (store && store !== 'all') { 
+            jwasuQuery.storeName = { $in: store.split(',') }; 
+        }
         const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).sort({ date: -1 }).toArray();
 
-        // A-3. [매니저 목록] 조회 (이름 매칭용)
+        // A-3. [매니저 목록] 조회
         const managerList = await db.collection('managers').find().toArray();
 
         // ===============================================
-        // B. 매니저 이름 사전 만들기 (Map)
+        // B. 매니저 이름 사전 만들기 (매칭용)
         // ===============================================
         const managerListMap = {};
         managerList.forEach(m => {
             const rawKey = m.mall_id || m.storeName || m.store;
             const val = m.client_id || m.managerName || m.name;
             if (rawKey && val) {
-                // 공백 제거 매칭 ("롯데 강남" == "롯데강남")
+                // 공백 제거 ("롯데 강남" == "롯데강남")
                 const cleanKey = String(rawKey).replace(/\s+/g, '');
                 managerListMap[cleanKey] = val;
             }
         });
 
         // ===============================================
-        // C. 데이터 단순 나열 (병합은 프론트엔드에서 함)
+        // C. 데이터 단순 나열 (병합은 프론트에서)
         // ===============================================
         const report = [];
 
-        // 1. 좌수 데이터 추가
+        // 1. 좌수 데이터 밀어넣기
         jwasuList.forEach(j => {
             let mgrName = j.managerName;
-            // 저장된 이름이 없거나 미지정이면, 매니저 목록에서 찾아 채워넣기
+            // 이름 없으면 매니저 목록에서 찾기
             if (!mgrName || mgrName === '미지정') {
                 const lookupKey = String(j.storeName).replace(/\s+/g, '');
                 mgrName = managerListMap[lookupKey] || '미지정';
             }
             report.push({
                 type: 'jwasu',
-                date: j.date,
+                date: j.date, // "2025-12-08"
                 storeName: j.storeName,
                 managerName: mgrName,
                 count: j.count || 0,
@@ -1256,9 +1263,13 @@ app.get('/api/jwasu/table', async (req, res) => {
             });
         });
 
-        // 2. 매출 데이터 추가
+        // 2. 매출 데이터 밀어넣기
         salesData.forEach(s => {
-            const dateStr = moment(s.createdAt).tz('Asia/Seoul').format('YYYY-MM-DD');
+            // 날짜 객체를 "YYYY-MM-DD" 문자열로 변환 (한국 시간 고려)
+            // 간단한 방법: toISOString() 대신 로컬 시간 계산
+            const kDate = new Date(s.createdAt.getTime() - (s.createdAt.getTimezoneOffset() * 60000));
+            const dateStr = kDate.toISOString().split('T')[0];
+
             report.push({
                 type: 'sales',
                 date: dateStr,
@@ -1269,14 +1280,15 @@ app.get('/api/jwasu/table', async (req, res) => {
             });
         });
 
+        console.log(`✅ [API] 데이터 조회 성공: 좌수 ${jwasuList.length}건, 매출 ${salesData.length}건`);
         res.json({ success: true, report: report });
 
     } catch (error) {
-        console.error('데이터 조회 중 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류' });
+        console.error('🚨 [API 에러] 데이터 조회 실패:', error);
+        // 프론트엔드에 에러 내용 전달
+        res.status(500).json({ success: false, message: error.toString() });
     }
 });
-
 // 6. [GET] 월별 히스토리
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
