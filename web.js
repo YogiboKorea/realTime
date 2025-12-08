@@ -969,7 +969,7 @@ app.get('/api/clean-bots', async (req, res) => {
 
 
 // ==========================================
-// [전역 변수 설정]
+// [전역 변수 및 설정]
 // ==========================================
 const jwasuCollectionName = 'offline_jwasu';   // 좌수 데이터
 const managerCollectionName = 'managers';      // 매니저 데이터
@@ -1016,7 +1016,7 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
     }
 });
 
-// 3. [DELETE] 매니저(링크) 삭제 + 해당 매니저의 모든 기록 삭제
+// 3. [DELETE] 매니저(링크) 삭제
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1026,14 +1026,14 @@ app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
         const targetManager = await adminCollection.findOne({ _id: new ObjectId(id) });
         if (!targetManager) return res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
 
+        // 해당 매니저의 기록 삭제
         const deleteDataResult = await dataCollection.deleteMany({
             storeName: targetManager.storeName,
             managerName: targetManager.managerName
         });
 
+        // 링크 삭제
         const deleteLinkResult = await adminCollection.deleteOne({ _id: new ObjectId(id) });
-
-        console.log(`매니저 삭제됨: ${targetManager.storeName} ${targetManager.managerName} (기록 ${deleteDataResult.deletedCount}건 삭제)`);
 
         if (deleteLinkResult.deletedCount === 1) {
             res.json({ success: true, message: `기록 ${deleteDataResult.deletedCount}건이 모두 삭제되었습니다.` });
@@ -1046,7 +1046,7 @@ app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     }
 });
 
-// 4. [GET] 링크 ID로 매장/매니저 정보 조회
+// 4. [GET] 링크 ID로 정보 조회
 app.get('/api/jwasu/link/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1097,7 +1097,6 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const updatedDoc = result.value || result; 
         const todayCount = updatedDoc.count;
 
-        // 월별 합계 계산
         const pipeline = [
             { $match: { storeName: storeName, managerName: mgrName, date: { $gte: startOfMonth, $lte: todayStr } } },
             { $group: { _id: null, total: { $sum: "$count" } } }
@@ -1106,14 +1105,13 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : todayCount;
 
         res.json({ success: true, storeName, managerName: mgrName, todayCount, monthlyTotal });
-
     } catch (error) {
         console.error('좌수 증가 오류:', error);
         res.status(500).json({ success: false, message: '카운트 처리 중 오류 발생' });
     }
 });
 
-// 2. [POST] 좌수 카운트 취소 (Undo)
+// 2. [POST] 좌수 카운트 취소
 app.post('/api/jwasu/undo', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
@@ -1141,7 +1139,6 @@ app.post('/api/jwasu/undo', async (req, res) => {
         const updatedDoc = result.value || result;
 
         res.json({ success: true, storeName, managerName: mgrName, todayCount: updatedDoc ? updatedDoc.count : 0, monthlyTotal });
-
     } catch (error) {
         console.error('취소 처리 오류:', error);
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
@@ -1174,7 +1171,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
         res.json({ success: true, startDate: targetStartDate, endDate: targetEndDate, totalCount, data: dashboardData });
-
     } catch (error) {
         console.error('대시보드 조회 오류:', error);
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
@@ -1186,109 +1182,131 @@ app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
 });
 
+
 // ==========================================
-// [API 수정] 통합 데이터 조회 (안전성 강화판)
+// [섹션 - 수정됨] 통합 데이터 조회 API (무중단 안전 버전)
 // ==========================================
 app.get('/api/jwasu/table', async (req, res) => {
+    console.log('📡 [API 요청] /api/jwasu/table 진입');
+
     try {
         const { store, startDate, endDate } = req.query;
 
-        // 1. 날짜 처리 (moment 없이 안전하게 변환)
-        // 화면에서 '2025-12-08' 형태로 옴
-        const startStr = startDate; 
-        const endStr = endDate;
-        
-        // 매출 DB 검색용 Date 객체 생성 (00:00:00 ~ 23:59:59)
-        const startObj = new Date(`${startStr}T00:00:00.000Z`); // UTC 기준 보정 필요할 수 있음 (로컬환경에 따라)
-        // 간단하게 한국 시간 보정을 위해 9시간 뺄 수도 있으나, 
-        // 기존 sales 데이터가 한국시간 기준 로컬 Date로 저장된다면 아래처럼 처리
-        const startForSales = new Date(`${startStr}T00:00:00`);
-        const endForSales = new Date(`${endStr}T23:59:59`);
+        // 1. 날짜 처리 (moment 라이브러리 없이 순수 JS 사용 - 서버 꺼짐 방지)
+        const startStr = startDate || new Date().toISOString().split('T')[0];
+        const endStr = endDate || new Date().toISOString().split('T')[0];
 
+        // 매출 DB 검색용 Date 객체 (00:00:00 ~ 23:59:59.999)
+        const startObj = new Date(startStr + 'T00:00:00.000Z'); 
+        const endObj = new Date(endStr + 'T23:59:59.999Z');
+        
         // ===============================================
         // A. 데이터 조회
         // ===============================================
 
-        // A-1. [매출] 조회 (Date 객체로 검색)
-        let salesQuery = { createdAt: { $gte: startForSales, $lte: endForSales } };
-        if (store && store !== 'all') { 
-            salesQuery.store = { $in: store.split(',') }; 
+        // A-1. [매출] 조회
+        let salesQuery = { createdAt: { $gte: startObj, $lte: endObj } };
+        if (store && store !== 'all') {
+            salesQuery.store = { $in: store.split(',') };
         }
+        
+        // DB 조회 (실패 시 에러 캐치)
         const salesData = await db.collection('sales').find(salesQuery).sort({ createdAt: -1 }).toArray();
 
-        // A-2. [좌수] 조회 (문자열로 검색)
+        // A-2. [좌수] 조회 (문자열 날짜 비교)
         let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
-        if (store && store !== 'all') { 
-            jwasuQuery.storeName = { $in: store.split(',') }; 
+        if (store && store !== 'all') {
+            jwasuQuery.storeName = { $in: store.split(',') };
         }
+        
         const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).sort({ date: -1 }).toArray();
 
         // A-3. [매니저 목록] 조회
         const managerList = await db.collection('managers').find().toArray();
 
         // ===============================================
-        // B. 매니저 이름 사전 만들기 (매칭용)
+        // B. 매니저 이름 매칭 사전 생성
         // ===============================================
         const managerListMap = {};
-        managerList.forEach(m => {
-            const rawKey = m.mall_id || m.storeName || m.store;
-            const val = m.client_id || m.managerName || m.name;
-            if (rawKey && val) {
-                // 공백 제거 ("롯데 강남" == "롯데강남")
-                const cleanKey = String(rawKey).replace(/\s+/g, '');
-                managerListMap[cleanKey] = val;
-            }
-        });
+        if (managerList && managerList.length > 0) {
+            managerList.forEach(m => {
+                const rawKey = m.mall_id || m.storeName || m.store || m.shop_name;
+                const val = m.client_id || m.managerName || m.name || m.manager_name;
+                
+                if (rawKey && val) {
+                    // 공백 제거 후 저장 ("롯데 동탄" -> "롯데동탄")
+                    const cleanKey = String(rawKey).replace(/\s+/g, '');
+                    managerListMap[cleanKey] = val;
+                }
+            });
+        }
 
         // ===============================================
-        // C. 데이터 단순 나열 (병합은 프론트에서)
+        // C. 데이터 병합 (단순 리스트화)
         // ===============================================
         const report = [];
 
-        // 1. 좌수 데이터 밀어넣기
+        // 1. 좌수 데이터 추가
         jwasuList.forEach(j => {
             let mgrName = j.managerName;
-            // 이름 없으면 매니저 목록에서 찾기
+            
+            // 저장된 이름이 없거나 '미지정'이면, 매니저 목록에서 다시 찾기
             if (!mgrName || mgrName === '미지정') {
-                const lookupKey = String(j.storeName).replace(/\s+/g, '');
-                mgrName = managerListMap[lookupKey] || '미지정';
+                const storeKey = String(j.storeName || '').replace(/\s+/g, '');
+                mgrName = managerListMap[storeKey] || '미지정';
             }
+
             report.push({
                 type: 'jwasu',
-                date: j.date, // "2025-12-08"
-                storeName: j.storeName,
+                date: j.date, // "YYYY-MM-DD" 문자열 그대로 사용
+                storeName: j.storeName || '알수없음',
                 managerName: mgrName,
                 count: j.count || 0,
                 revenue: 0 
             });
         });
 
-        // 2. 매출 데이터 밀어넣기
+        // 2. 매출 데이터 추가
         salesData.forEach(s => {
-            // 날짜 객체를 "YYYY-MM-DD" 문자열로 변환 (한국 시간 고려)
-            // 간단한 방법: toISOString() 대신 로컬 시간 계산
-            const kDate = new Date(s.createdAt.getTime() - (s.createdAt.getTimezoneOffset() * 60000));
-            const dateStr = kDate.toISOString().split('T')[0];
+            // 날짜 객체를 문자열로 변환 (안전한 방법)
+            let dateStr = startStr; // 기본값
+            if (s.createdAt) {
+                try {
+                    // UTC -> 한국시간 보정 (약식)
+                    const kDate = new Date(s.createdAt.getTime() + (9 * 60 * 60 * 1000)); 
+                    dateStr = kDate.toISOString().split('T')[0];
+                } catch (e) {
+                    dateStr = startStr;
+                }
+            }
 
             report.push({
                 type: 'sales',
                 date: dateStr,
-                storeName: s.store,
+                storeName: s.store || '알수없음',
                 managerName: '매출집계', 
                 count: 0,
                 revenue: s.revenue || 0
             });
         });
 
-        console.log(`✅ [API] 데이터 조회 성공: 좌수 ${jwasuList.length}건, 매출 ${salesData.length}건`);
-        res.json({ success: true, report: report });
+        console.log(`✅ [API 완료] 총 ${report.length}건 데이터 응답`);
+        
+        // 성공 응답
+        res.status(200).json({ success: true, report: report });
 
     } catch (error) {
-        console.error('🚨 [API 에러] 데이터 조회 실패:', error);
-        // 프론트엔드에 에러 내용 전달
-        res.status(500).json({ success: false, message: error.toString() });
+        console.error('🚨 [치명적 서버 오류]:', error);
+        // 서버가 죽지 않고 에러 메시지 반환
+        res.status(500).json({ success: false, message: '서버 내부 오류', error: error.toString() });
     }
 });
+
+
+// ==========================================
+// [섹션 - 기타 통계]
+// ==========================================
+
 // 6. [GET] 월별 히스토리
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
@@ -1345,10 +1363,9 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
     }
 });
 
-
-// =========================================================
-// [신규 섹션] 실시간 매출 집계 및 엑셀 연동 API
-// =========================================================
+// ==========================================
+// [섹션 - 매출 관련]
+// ==========================================
 
 // 1. [POST] 판매 등록
 app.post('/api/sales/record', async (req, res) => {
@@ -1373,7 +1390,7 @@ app.get('/api/sales/stores', async (req, res) => {
     }
 });
 
-// 3. [GET] 판매 집계표 데이터 조회 (raw data view)
+// 3. [GET] 판매 집계표 (Raw Data)
 app.get('/api/sales/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1422,12 +1439,9 @@ app.get('/api/sales/live-count', async (req, res) => {
     }
 });
 
-
 // ==========================================
-// [섹션 D] Cafe24 쇼핑몰 매니저 관리 API
+// [섹션 D] Cafe24 매니저 관리
 // ==========================================
-
-// 1. [GET] 쇼핑몰 매니저 정보 조회
 app.get('/api/managers', async (req, res) => {
     try {
         const { mall_id } = req.query;
@@ -1441,7 +1455,6 @@ app.get('/api/managers', async (req, res) => {
     }
 });
 
-// 2. [POST] 쇼핑몰 매니저 정보 저장
 app.post('/api/managers', async (req, res) => {
     try {
         const { mall_id, shop_url, client_id } = req.body; 
@@ -1464,8 +1477,9 @@ app.post('/api/managers', async (req, res) => {
 });
 
 
+
 // ==========================================
-// [API 라우터 시작] (작성하신 코드)
+// [API 라우터 시작] (작성하신 코드)  12월 이벤트 
 // ==========================================
 
 // 1. [당첨자 명단 조회 API]
