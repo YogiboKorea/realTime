@@ -1558,13 +1558,12 @@ app.get('/api/sales/live-count', async (req, res) => {
         res.status(500).json({ success: false }); 
     }
 });
-
-// [GET] 매장별 좌수(별도DB) + 매출(엑셀DB) + 매니저(매니저DB) 통합 조회
+// [GET] 통합 데이터 조회 API (매칭 로직 강화 버전)
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
 
-        // 1. 날짜 필터 설정
+        // 1. 날짜 범위 설정
         const start = startDate ? new Date(startDate) : new Date();
         start.setHours(0, 0, 0, 0);
         const end = endDate ? new Date(endDate) : new Date();
@@ -1573,53 +1572,55 @@ app.get('/api/jwasu/table', async (req, res) => {
         // 2. 기본 매칭 조건 (매출 데이터 기준)
         let matchQuery = {
             createdAt: { $gte: start, $lte: end },
-            source: 'excel_import' // 엑셀에서 올린 매출 데이터만 타겟팅
+            source: 'excel_import' 
         };
 
         if (store && store !== 'all') {
-            const storeNames = store.split(',');
+            // 쉼표로 구분된 매장명 배열로 변환
+            const storeNames = store.split(',').map(s => s.trim());
             matchQuery.store = { $in: storeNames };
         }
 
-        const collection = db.collection('sales'); // 매출 컬렉션 (기준)
+        const collection = db.collection('sales'); // 매출 데이터(엑셀)
 
         const report = await collection.aggregate([
-            // ---------------------------------------------------------
-            // 1단계: 매출 데이터 필터링
-            // ---------------------------------------------------------
+            // ------------------------------------------------
+            // 1단계: 매출 데이터 찾기
+            // ------------------------------------------------
             { $match: matchQuery },
 
-            // ---------------------------------------------------------
-            // 2단계: 날짜 포맷 통일 (매칭을 위해 YYYY-MM-DD 문자열 생성)
-            // ---------------------------------------------------------
+            // ------------------------------------------------
+            // 2단계: 날짜 변환 (Join을 위해 YYYY-MM-DD 문자열로 통일)
+            // ------------------------------------------------
             {
                 $addFields: {
-                    dateStr: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }
+                    // 매출 데이터의 날짜를 문자열로 변환 (예: "2025-12-08")
+                    dateStr: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Seoul" } }
                 }
             },
 
-            // ---------------------------------------------------------
-            // 3단계: 매니저 정보 가져오기 (매장명으로 Join)
-            // ---------------------------------------------------------
+            // ------------------------------------------------
+            // 3단계: 매니저 정보 연결 (컬렉션 이름: managers)
+            // ------------------------------------------------
             {
                 $lookup: {
-                    from: 'managers',         // 매니저 컬렉션 이름
-                    localField: 'store',
-                    foreignField: 'mall_id',
+                    from: 'managers',         // ★ 확인: 매니저 컬렉션 이름이 맞는지?
+                    localField: 'store',      // sales 컬렉션의 매장명
+                    foreignField: 'mall_id',  // managers 컬렉션의 매장명
                     as: 'managerInfo'
                 }
             },
             { $unwind: { path: '$managerInfo', preserveNullAndEmptyArrays: true } },
 
-            // ---------------------------------------------------------
-            // 4단계: ★ 좌수 데이터 가져오기 (매장명 AND 날짜로 Join)
-            // ---------------------------------------------------------
+            // ------------------------------------------------
+            // 4단계: 좌수 데이터 연결 (컬렉션 이름: jwasu)
+            // ------------------------------------------------
             {
                 $lookup: {
-                    from: 'jwasu', // ★ 좌수 데이터가 저장된 컬렉션 이름 (확인 필요!)
+                    from: 'jwasu', // ★ 확인: 좌수 데이터 컬렉션 이름이 맞는지? (ex: jwasu_counts?)
                     let: { 
                         currentStore: '$store', 
-                        currentDate: '$dateStr' // 위에서 만든 날짜 문자열 사용
+                        currentDate: '$dateStr' 
                     },
                     pipeline: [
                         {
@@ -1627,8 +1628,12 @@ app.get('/api/jwasu/table', async (req, res) => {
                                 $expr: {
                                     $and: [
                                         { $eq: ['$store', '$$currentStore'] }, // 매장명 일치
-                                        // 좌수 DB의 날짜 필드가 'date' 문자열("2025-12-08")이라고 가정
-                                        { $eq: ['$date', '$$currentDate'] }    
+                                        // 좌수 DB의 날짜 필드(date)가 문자열인지 Date인지에 따라 다름
+                                        // 아래는 좌수 DB의 date가 "문자열(2025-12-08)" 이라고 가정했을 때:
+                                        { $eq: ['$date', '$$currentDate'] } 
+                                        
+                                        // 만약 좌수 DB의 date가 ISODate형식이면 아래 주석을 해제하고 위 줄을 주석처리 하세요.
+                                        // { $eq: [{ $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: "Asia/Seoul" } }, '$$currentDate'] }
                                     ]
                                 }
                             }
@@ -1637,29 +1642,27 @@ app.get('/api/jwasu/table', async (req, res) => {
                     as: 'jwasuInfo'
                 }
             },
-            // 좌수 데이터가 여러 개일 수 있으니 합치거나 첫 번째 것 사용 (여기선 첫번째 가정)
             { $unwind: { path: '$jwasuInfo', preserveNullAndEmptyArrays: true } },
 
-            // ---------------------------------------------------------
-            // 5단계: 최종 데이터 정리 ($project)
-            // ---------------------------------------------------------
+            // ------------------------------------------------
+            // 5단계: 최종 출력 필드 정리
+            // ------------------------------------------------
             {
                 $project: {
                     _id: 1,
                     date: '$dateStr',
-                    storeName: '$store',
+                    storeName: '$store', // 매장명
                     
-                    // 매출은 현재 컬렉션(sales)에서 가져옴
-                    revenue: '$revenue', 
+                    revenue: '$revenue', // 매출
                     sales: '$revenue',
 
-                    // ★ 좌수는 Join한 jwasuInfo에서 가져옴 (없으면 0)
-                    // jwasuInfo 안에 count 필드가 있다고 가정
-                    count: { $ifNull: ['$jwasuInfo.count', 0] },
-                    amount: { $ifNull: ['$jwasuInfo.count', 0] },
+                    // ★ 좌수 (jwasuInfo가 있으면 그 안의 count, 없으면 0)
+                    // 필드명이 count가 아니라 quantity, qty 등일 수 있으니 DB 확인 필요
+                    count: { $ifNull: ['$jwasuInfo.count', 0] }, 
 
-                    // 매니저 이름
-                    managerName: { $ifNull: ['$managerInfo.client_id', '미지정'] }
+                    // ★ 매니저 이름 (managerInfo가 있으면 그 안의 client_id, 없으면 '미지정')
+                    // 필드명이 client_id가 아니라 name, managerName 등일 수 있음
+                    managerName: { $ifNull: ['$managerInfo.client_id', '미지정'] } 
                 }
             },
 
@@ -1668,20 +1671,18 @@ app.get('/api/jwasu/table', async (req, res) => {
 
         ]).toArray();
 
+        console.log(`[API 조회] 검색된 데이터: ${report.length}건`); // 서버 콘솔에 로그 찍기
+        if(report.length > 0) {
+            console.log("첫번째 데이터 샘플:", report[0]); // 첫번째 데이터 구조 확인용
+        }
+
         res.json({ success: true, report: report });
 
     } catch (error) {
-        console.error('데이터 조회 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류 발생' });
+        console.error('API Error:', error);
+        res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
-
-
-
-
-
-
-
 
 
 // ==========================================
