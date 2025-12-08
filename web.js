@@ -1491,36 +1491,99 @@ app.get('/api/sales/live-count', async (req, res) => {
         res.status(500).json({ success: false }); 
     }
 });
-
-// 5. [POST] 엑셀 대량 업로드 (Import)
-app.post('/api/sales/import', async (req, res) => {
+// 5. [GET] 상세 집계표 조회 (좌수 + 매출 병합 버전)
+app.get('/api/jwasu/table', async (req, res) => {
     try {
-        const { salesData } = req.body;
+        const { store, startDate, endDate } = req.query;
 
-        if (!salesData || salesData.length === 0) {
-            return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
+        // 1. 기본 검색 조건 (좌수왕 DB용)
+        const jwasuQuery = {
+            date: { $gte: startDate, $lte: endDate }
+        };
+
+        // 2. 다중 매장 선택 처리
+        let targetStores = [];
+        if (store && store !== 'all') {
+            targetStores = store.split(',');
+            jwasuQuery.storeName = { $in: targetStores };
         }
 
-        // 엑셀 데이터를 DB 스키마에 맞춰 변환
-        const docs = salesData.map(item => ({
-            store: item.store,
-            amount: parseInt(item.amount),
-            createdAt: new Date(item.date), // 엑셀의 날짜 문자열을 Date 객체로 변환
-            source: 'excel_import' // 구분을 위해 소스 표시
-        }));
+        // 3. 좌수 데이터 가져오기 (jwasu 컬렉션)
+        const jwasuCollection = db.collection(jwasuCollectionName);
+        const jwasuRecords = await jwasuCollection.find(jwasuQuery).toArray();
 
-        // 대량 저장 (insertMany)
-        const result = await db.collection('sales').insertMany(docs);
+        // 4. 매출 데이터 가져오기 (sales 컬렉션 - 엑셀 데이터)
+        // 날짜 포맷이 다르므로 범위로 검색 (ISO Date)
+        const salesCollection = db.collection('sales'); // 컬렉션 이름 확인 필요 (app.js와 동일해야 함)
+        
+        const salesQuery = {
+            createdAt: { 
+                $gte: new Date(`${startDate}T00:00:00.000Z`), 
+                $lte: new Date(`${endDate}T23:59:59.999Z`) 
+            }
+        };
+        if (targetStores.length > 0) {
+            salesQuery.store = { $in: targetStores };
+        }
 
-        res.json({ success: true, count: result.insertedCount });
-    } catch (e) {
-        console.error('엑셀 업로드 오류:', e);
-        res.status(500).json({ success: false });
+        const salesRecords = await salesCollection.find(salesQuery).toArray();
+
+        // 5. 데이터 병합 (날짜 + 매장명 기준)
+        // 먼저 좌수 데이터를 기준으로 맵을 만듭니다.
+        const mergedData = {};
+
+        // (1) 좌수 데이터 넣기
+        jwasuRecords.forEach(rec => {
+            const key = `${rec.date}|${rec.storeName}`;
+            if (!mergedData[key]) {
+                mergedData[key] = {
+                    date: rec.date,
+                    storeName: rec.storeName,
+                    managerName: rec.managerName || '미지정',
+                    count: 0,
+                    sales: 0
+                };
+            }
+            mergedData[key].count += rec.count;
+            // 매니저 정보는 좌수 데이터에만 있으므로 덮어씌움
+            if (rec.managerName) mergedData[key].managerName = rec.managerName;
+        });
+
+        // (2) 매출 데이터 합치기
+        salesRecords.forEach(rec => {
+            // ISO 날짜를 YYYY-MM-DD 문자열로 변환 (Timezone 고려)
+            // 여기서는 간단히 문자열 앞부분만 자름 (데이터가 00:00:00Z로 저장되므로)
+            const dateStr = rec.createdAt.toISOString().split('T')[0];
+            const key = `${dateStr}|${rec.store}`;
+
+            if (!mergedData[key]) {
+                // 좌수는 없는데 매출만 있는 경우 (엑셀만 올린 날)
+                mergedData[key] = {
+                    date: dateStr,
+                    storeName: rec.store,
+                    managerName: '미지정', // 매출만 있으면 매니저 정보 모름
+                    count: 0,
+                    sales: 0
+                };
+            }
+            // 매출액 누적 (혹시 중복 데이터가 있으면 합산)
+            mergedData[key].sales += (rec.revenue || 0); 
+        });
+
+        // 6. 배열로 변환 및 정렬
+        const report = Object.values(mergedData).sort((a, b) => {
+            // 날짜 내림차순 -> 매장 오름차순
+            if (a.date !== b.date) return b.date.localeCompare(a.date);
+            return a.storeName.localeCompare(b.storeName);
+        });
+
+        res.json({ success: true, report });
+
+    } catch (error) {
+        console.error('집계표 조회 오류:', error);
+        res.status(500).json({ success: false, message: '데이터 조회 실패' });
     }
 });
-
-
-
 
 
 
