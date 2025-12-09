@@ -13,6 +13,7 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 
+
 // --- 2. Express 앱 및 포트 설정 ---
 const app = express();
 const PORT = 8014; // 8014 포트로 통일
@@ -1519,8 +1520,8 @@ app.post('/api/play-event', async (req, res) => {
       const MAX_DAILY_WINNERS = 10; 
       const WIN_PROBABILITY_PERCENT = 8; 
   
-      const PRIZE_COUPON_NO = "1234567890";
-      const PRIZE_TARGET_URL = "/product/스퀴지보-애니멀/128/category/222/display/1/";
+      const PRIZE_COUPON_NO = "6083836502100001083";
+      const PRIZE_TARGET_URL = "https://yogibo.kr/surl/P/2571";
   
       if (!userId) {
         return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
@@ -1611,41 +1612,46 @@ app.get('/api/kakao-key', (req, res) => {
         key: key 
     });
 });
-
 app.get('/api/12Event', async (req, res) => {
     try {
         const collection = db.collection('event12_collection');
 
-        // 모든 참여 기록 조회 (필요한 필드만 선택)
+        // 1. 데이터 조회 (DB)
         const allRecords = await collection.find({})
             .project({ _id: 0, userId: 1, date: 1, tryCount: 1, status: 1, createdAt: 1 })
             .sort({ createdAt: 1 })
             .toArray();
 
-        // CSV 필드 정의
-        const fields = [
-            { label: '참여 아이디', value: 'userId' },
-            { label: '참여 날짜', value: 'date' },
-            { label: '총 시도 횟수', value: 'tryCount' },
-            { label: '최종 결과', value: 'status' }, // win 또는 lose
+        // 2. Excel Workbook 및 Worksheet 생성
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('이벤트 참여 기록');
+
+        // 3. 헤더 정의 (순서와 이름 지정)
+        worksheet.columns = [
+            { header: '참여 아이디', key: 'userId', width: 20 },
+            { header: '참여 날짜 (KST)', key: 'date', width: 15 },
+            { header: '총 시도 횟수', key: 'tryCount', width: 10 },
+            { header: '최종 결과', key: 'status', width: 10 },
+            { header: '기록 시각 (UTC)', key: 'createdAt', width: 25, style: { numFmt: 'yyyy-mm-dd hh:mm:ss' } } // 날짜/시간 형식 지정
         ];
 
-        const json2csvParser = new Parser({ fields });
-        const csv = json2csvParser.parse(allRecords);
+        // 4. 데이터 추가
+        // MongoDB에서 가져온 데이터를 워크시트에 바로 추가합니다.
+        worksheet.addRows(allRecords);
 
-        // HTTP 응답 헤더 설정: CSV 파일 다운로드를 유도
-        res.header('Content-Type', 'text/csv; charset=utf-8');
-        res.attachment('event_participants_' + moment().format('YYYYMMDD_HHmmss') + '.csv');
+        // 5. HTTP 응답 헤더 설정 (.xlsx 파일 다운로드 유도)
+        res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.attachment('event_participants_' + moment().format('YYYYMMDD_HHmmss') + '.xlsx');
         
-        // CSV 데이터 전송
-        res.send(csv);
+        // 6. 파일 전송
+        await workbook.xlsx.write(res);
+        res.end(); // 응답 완료
 
     } catch (error) {
-        console.error('CSV 익스포트 오류:', error);
-        res.status(500).send('서버 오류: 참여 기록을 추출할 수 없습니다.');
+        console.error('Excel 익스포트 오류:', error);
+        res.status(500).send('서버 오류: 엑셀 파일을 생성할 수 없습니다.');
     }
 });
-
 
 
 
