@@ -1612,6 +1612,40 @@ app.get('/api/kakao-key', (req, res) => {
     });
 });
 
+app.get('/api/12Event', async (req, res) => {
+    try {
+        const collection = db.collection('event12_collection');
+
+        // 모든 참여 기록 조회 (필요한 필드만 선택)
+        const allRecords = await collection.find({})
+            .project({ _id: 0, userId: 1, date: 1, tryCount: 1, status: 1, createdAt: 1 })
+            .sort({ createdAt: 1 })
+            .toArray();
+
+        // CSV 필드 정의
+        const fields = [
+            { label: '참여 아이디', value: 'userId' },
+            { label: '참여 날짜', value: 'date' },
+            { label: '총 시도 횟수', value: 'tryCount' },
+            { label: '최종 결과', value: 'status' }, // win 또는 lose
+        ];
+
+        const json2csvParser = new Parser({ fields });
+        const csv = json2csvParser.parse(allRecords);
+
+        // HTTP 응답 헤더 설정: CSV 파일 다운로드를 유도
+        res.header('Content-Type', 'text/csv; charset=utf-8');
+        res.attachment('event_participants_' + moment().format('YYYYMMDD_HHmmss') + '.csv');
+        
+        // CSV 데이터 전송
+        res.send(csv);
+
+    } catch (error) {
+        console.error('CSV 익스포트 오류:', error);
+        res.status(500).send('서버 오류: 참여 기록을 추출할 수 없습니다.');
+    }
+});
+
 
 
 
