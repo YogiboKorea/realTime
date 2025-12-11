@@ -1511,7 +1511,7 @@ app.get('/api/event-winners', async (req, res) => {
       res.status(500).json({ success: false, winners: [] });
     }
 });
-  // 2. [이벤트 참여 API]
+// 2. [이벤트 참여 API]
 app.post('/api/play-event', async (req, res) => {
     try {
       const { userId, isRetry } = req.body; 
@@ -1520,6 +1520,7 @@ app.post('/api/play-event', async (req, res) => {
       const MAX_DAILY_WINNERS = 10; 
       const WIN_PROBABILITY_PERCENT = 8; 
   
+      // ★ 쿠폰 정보 (실제 발급될 쿠폰 번호와 이동 URL)
       const PRIZE_COUPON_NO = "6083836502100001083";
       const PRIZE_TARGET_URL = "https://yogibo.kr/surl/P/2571";
   
@@ -1527,25 +1528,30 @@ app.post('/api/play-event', async (req, res) => {
         return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
       }
   
-      // moment-timezone 필요
       const now = moment().tz('Asia/Seoul');
       const todayStr = now.format('YYYY-MM-DD');
       const collection = db.collection('event12_collection');
   
       console.log(`[EVENT] 유저: ${userId}, 재도전: ${isRetry}`);
   
-      // (1) 평생 중복 체크
+      // (1) 평생 중복 체크 (★ 이 부분이 수정되었습니다)
       const existingWin = await collection.findOne({ userId: userId, status: 'win' });
       if (existingWin) {
+        // 이미 당첨된 경우: 쿠폰 다운로드 버튼을 다시 띄우기 위해 당첨 응답을 재전송합니다.
+        console.log('-> 결과: 이미 과거 당첨자, 쿠폰 다운로드 기회 재부여.');
+        
+        // 프론트엔드에서 승리 팝업(showPopup('win', ...))을 다시 띄우도록 응답
         return res.status(200).json({ 
-          success: false, 
-          code: 'ALREADY_WON', 
-          message: '이미 당첨되셨습니다. 상품 페이지로 바로 이동합니다.',
-          targetUrl: PRIZE_TARGET_URL 
+          success: true,           // 성공으로 처리
+          code: 'ALREADY_WON_REPLAY', // 새로운 코드로 구분
+          isWin: true,             // 당첨 상태로 간주
+          message: '이미 당첨되셨습니다. 쿠폰을 다시 다운로드하시겠습니까?',
+          tryCount: 2,             // 팝업 로직에 영향 주지 않도록 2로 설정
+          couponData: { couponNo: PRIZE_COUPON_NO, targetUrl: PRIZE_TARGET_URL } 
         });
       }
   
-      // (2) 오늘 참여 이력 체크
+      // (2) 오늘 참여 이력 체크 (기존 로직 유지)
       const todayRecord = await collection.findOne({ userId: userId, date: todayStr });
       
       if (todayRecord) {
@@ -1557,7 +1563,7 @@ app.post('/api/play-event', async (req, res) => {
         }
       }
   
-      // (3) 당첨 여부 결정
+      // (3) 당첨 여부 결정 (기존 로직 유지)
       const dailyWinnerCount = await collection.countDocuments({ date: todayStr, status: 'win' });
       
       let isWin = false;
@@ -1570,7 +1576,7 @@ app.post('/api/play-event', async (req, res) => {
   
       const resultStatus = isWin ? 'win' : 'lose';
   
-      // (4) DB 업데이트/저장
+      // (4) DB 업데이트/저장 (기존 로직 유지)
       if (todayRecord) {
         await collection.updateOne(
           { _id: todayRecord._id },
@@ -1582,7 +1588,7 @@ app.post('/api/play-event', async (req, res) => {
         });
       }
   
-      // (5) 응답
+      // (5) 응답 (기존 로직 유지)
       res.status(200).json({
         success: true,
         code: 'RESULT',
@@ -1632,7 +1638,6 @@ app.get('/api/12Event', async (req, res) => {
             { header: '참여 날짜 (KST)', key: 'date', width: 15 },
             { header: '총 시도 횟수', key: 'tryCount', width: 10 },
             { header: '최종 결과', key: 'status', width: 10 },
-            { header: '기록 시각 (UTC)', key: 'createdAt', width: 25, style: { numFmt: 'yyyy-mm-dd hh:mm:ss' } } // 날짜/시간 형식 지정
         ];
 
         // 4. 데이터 추가
