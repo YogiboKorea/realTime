@@ -1494,7 +1494,69 @@ app.get('/api/sales/live-count', async (req, res) => {
 
 
 
+// ==========================================
+// [누락된 섹션] 통계 조회 API (반드시 추가해주세요!)
+// ==========================================
 
+// 6. [GET] 월별 좌수왕(명예의 전당) 히스토리 조회
+app.get('/api/jwasu/monthly-history', async (req, res) => {
+    try {
+        const { month } = req.query;
+        if (!month) return res.status(400).json({ success: false, message: '월 정보 필요' });
+        
+        const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
+        const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
+        const collection = db.collection(jwasuCollectionName); // 'offline_jwasu'
+
+        const pipeline = [
+            { $match: { date: { $gte: startOfMonth, $lte: endOfMonth } } },
+            { $group: { _id: { store: "$storeName", manager: "$managerName" }, totalCount: { $sum: "$count" } } }
+        ];
+
+        const aggResults = await collection.aggregate(pipeline).toArray();
+        const historyData = aggResults.map(item => ({
+            storeName: item._id.store,
+            managerName: item._id.manager || '미지정',
+            count: item.totalCount,
+            rank: 0
+        }));
+        
+        // 랭킹 정렬
+        historyData.sort((a, b) => b.count - a.count);
+        historyData.forEach((item, index) => item.rank = index + 1);
+
+        res.json(historyData);
+    } catch (error) {
+        console.error('월별 조회 오류:', error);
+        res.status(500).json({ success: false, message: '월별 조회 실패' });
+    }
+});
+
+// 7. [GET] 내 통계(일별 로그) 조회
+// * 이 부분이 없어서 카운터 페이지에서 404 에러가 발생했습니다.
+app.get('/api/jwasu/my-stats', async (req, res) => {
+    try {
+        const { storeName, managerName } = req.query;
+        if (!storeName) return res.status(400).json({ success: false, message: '매장명 필요' });
+
+        const now = moment().tz('Asia/Seoul');
+        const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
+        const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
+        const collection = db.collection(jwasuCollectionName);
+        
+        const query = {
+            storeName: storeName,
+            date: { $gte: startOfThisMonth, $lte: endOfThisMonth }
+        };
+        if (managerName) query.managerName = managerName;
+
+        const dailyRecords = await collection.find(query).sort({ date: -1 }).toArray();
+        res.json({ success: true, data: dailyRecords });
+    } catch (error) {
+        console.error('통계 조회 오류:', error);
+        res.status(500).json({ success: false, message: '통계 조회 실패' });
+    }
+});
 
 
 
