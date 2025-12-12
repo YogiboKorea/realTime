@@ -1066,24 +1066,16 @@ app.get('/api/jwasu/link/:id', async (req, res) => {
 });
 
 
-// ==========================================
-// [설정] 컬렉션 이름 정의
-// ==========================================
-const jwasuCollectionName = 'offline_jwasu';      // [좌수] 일별 카운트 기록
-const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매니저 정보 (Admin 등록)
-// *참고: Cafe24용 매니저 컬렉션 변수는 아래 섹션 D에서 별도로 다룹니다.
 
-// 관리 대상 매장 리스트
-const OFFLINE_STORES = [
-    "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
-    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
-];
+
+
+
 
 // ==========================================
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
 // ==========================================
 
-// 1. [POST] 좌수 카운트 증가 (정보 스냅샷 저장 기능 추가)
+// 1. [POST] 좌수 카운트 증가 (정보 스냅샷 저장 기능 포함)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
@@ -1100,15 +1092,14 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const collection = db.collection(jwasuCollectionName);
         const staffCollection = db.collection(staffCollectionName);
 
-        // [New] 현재 매니저의 상세 정보(직함, 위탁여부, 목표 등) 조회
-        // 기록 시점에 이 정보를 같이 저장해야, 나중에 매니저 정보가 바뀌어도 과거 기록은 유지됨
+        // [중요] 카운트 당시의 매니저 정보(직함, 목표 등)를 조회하여 스냅샷으로 남김
         const staffInfo = await staffCollection.findOne({ storeName: storeName, managerName: mgrName });
 
         const updateData = {
             $inc: { count: 1 },
             $set: { 
                 lastUpdated: new Date(),
-                // 스냅샷 저장 (정보가 없으면 기본값)
+                // 정보가 있으면 저장, 없으면 기본값
                 role: staffInfo ? staffInfo.role : '매니저',
                 consignment: staffInfo ? staffInfo.consignment : 'N',
                 targetCount: staffInfo ? staffInfo.targetCount : 0
@@ -1190,12 +1181,11 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         const staffCollection = db.collection(staffCollectionName);
 
         // [Step 1] 활성 상태(ON)인 매니저 목록 가져오기
-        // isActive가 true이거나, 해당 필드가 없는(초기데이터) 경우만 포함
         const activeStaffs = await staffCollection.find({ 
             $or: [ { isActive: true }, { isActive: { $exists: false } } ] 
         }).toArray();
 
-        // 활성 매니저 식별용 Set (매장명_이름)
+        // 활성 매니저 식별용 Set
         const activeSet = new Set(activeStaffs.map(s => `${s.storeName}_${s.managerName}`));
 
         // [Step 2] 기간 내 기록 조회
@@ -1209,7 +1199,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             const mgr = record.managerName || '미지정';
             const uniqueKey = `${record.storeName}_${mgr}`;
 
-            // [Step 3] 활성 매니저만 집계에 포함 (미지정은 포함할지 선택, 여기선 포함)
+            // [Step 3] 활성 매니저만 집계에 포함
             if (activeSet.has(uniqueKey) || mgr === '미지정') {
                 if (!aggregates[uniqueKey]) {
                     // 현재 매니저 정보 찾기 (최신 목표좌수 등을 표시하기 위함)
@@ -1218,7 +1208,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     aggregates[uniqueKey] = { 
                         storeName: record.storeName, 
                         managerName: mgr,
-                        // 기록된 당시의 직함 사용 (없으면 최신 정보)
                         role: record.role || (currentInfo ? currentInfo.role : '-'),
                         targetCount: currentInfo ? currentInfo.targetCount : 0, // 목표는 최신 기준
                         count: 0, 
@@ -1249,11 +1238,9 @@ app.get('/api/jwasu/stores', (req, res) => {
 
 
 // ==========================================
-// [섹션 - 수정됨] 통합 데이터 조회 API (Table 뷰)
+// [섹션 - 통합 조회] 테이블 API (Table 뷰)
 // ==========================================
 app.get('/api/jwasu/table', async (req, res) => {
-    // console.log('📡 [API 요청] /api/jwasu/table 진입');
-
     try {
         const { store, startDate, endDate } = req.query;
 
@@ -1263,11 +1250,9 @@ app.get('/api/jwasu/table', async (req, res) => {
         const startObj = new Date(startStr + 'T00:00:00.000Z'); 
         const endObj = new Date(endStr + 'T23:59:59.999Z');
         
-        // ===============================================
         // A. 데이터 조회
-        // ===============================================
 
-        // A-0. 활성 매니저 목록 조회 (OFF된 매니저는 테이블에서도 숨김)
+        // A-0. 활성 매니저 목록 조회
         const activeStaffs = await db.collection(staffCollectionName).find({
              $or: [ { isActive: true }, { isActive: { $exists: false } } ]
         }).toArray();
@@ -1287,9 +1272,7 @@ app.get('/api/jwasu/table', async (req, res) => {
         }
         const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).sort({ date: -1 }).toArray();
 
-        // ===============================================
         // B. 데이터 병합
-        // ===============================================
         const report = [];
 
         // 1. 좌수 데이터 추가 (활성 필터링 적용)
@@ -1303,7 +1286,7 @@ app.get('/api/jwasu/table', async (req, res) => {
                     date: j.date,
                     storeName: j.storeName || '알수없음',
                     managerName: mgrName,
-                    role: j.role || '-',             // 스냅샷 정보 활용
+                    role: j.role || '-',             
                     consignment: j.consignment || 'N',
                     count: j.count || 0,
                     revenue: 0 
@@ -1342,72 +1325,162 @@ app.get('/api/jwasu/table', async (req, res) => {
 
 
 // ==========================================
-// [섹션 - 기타 통계]
+// [섹션 D] Cafe24 매니저 관리 (기존 유지)
+// ==========================================
+app.get('/api/managers', async (req, res) => {
+    try {
+        const { mall_id } = req.query;
+        const collection = db.collection(cafe24ManagerCollection);
+        const query = mall_id ? { mall_id: mall_id } : {};
+        const managers = await collection.find(query).toArray();
+        res.json({ success: true, managers: managers });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '매니저 정보 조회 실패' });
+    }
+});
+
+app.post('/api/managers', async (req, res) => {
+    try {
+        const { mall_id, shop_url, client_id } = req.body; 
+        if (!mall_id) return res.status(400).json({ success: false, message: 'mall_id 필수' });
+
+        const collection = db.collection(cafe24ManagerCollection);
+        const result = await collection.findOneAndUpdate(
+            { mall_id: mall_id },
+            { 
+                $set: { mall_id, shop_url: shop_url || '', client_id: client_id || '', lastUpdated: new Date() },
+                $setOnInsert: { createdAt: new Date(), status: 'active' }
+            },
+            { upsert: true, returnDocument: 'after' }
+        );
+        res.json({ success: true, message: '저장 완료', data: result.value || result });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '매니저 저장 실패' });
+    }
+});
+
+
+// ==========================================
+// [섹션 E] 관리자(Admin) 매니저 관리 API (등록/수정/삭제)
+// ★ 여기가 목표좌수 저장 및 수정의 핵심입니다 ★
 // ==========================================
 
-// 6. [GET] 월별 히스토리
-app.get('/api/jwasu/monthly-history', async (req, res) => {
+// 1. [GET] 매니저 전체 목록 조회
+app.get('/api/jwasu/admin/managers', async (req, res) => {
     try {
-        const { month } = req.query;
-        if (!month) return res.status(400).json({ success: false, message: '월 정보 필요' });
-        
-        const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
-        const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
-        const collection = db.collection(jwasuCollectionName);
-
-        // [Option] 히스토리에서도 OFF된 사람을 뺄 것인가? 
-        // 보통 "명예의 전당" 같은 히스토리는 퇴사자 기록도 남기는 게 맞으므로 필터링 안 함.
-        const pipeline = [
-            { $match: { date: { $gte: startOfMonth, $lte: endOfMonth } } },
-            { $group: { _id: { store: "$storeName", manager: "$managerName" }, totalCount: { $sum: "$count" } } }
-        ];
-
-        const aggResults = await collection.aggregate(pipeline).toArray();
-        const historyData = aggResults.map(item => ({
-            storeName: item._id.store,
-            managerName: item._id.manager || '미지정',
-            count: item.totalCount,
-            rank: 0
-        }));
-        historyData.sort((a, b) => b.count - a.count);
-        historyData.forEach((item, index) => item.rank = index + 1);
-
-        res.json(historyData);
+        // 이름순 정렬
+        const managers = await db.collection(staffCollectionName)
+            .find()
+            .sort({ storeName: 1, managerName: 1 })
+            .toArray();
+        res.json({ success: true, managers });
     } catch (error) {
-        console.error('월별 조회 오류:', error);
-        res.status(500).json({ success: false, message: '월별 조회 실패' });
+        res.status(500).json({ success: false, message: '목록 조회 실패' });
     }
 });
 
-// 7. [GET] 내 통계 조회
-app.get('/api/jwasu/my-stats', async (req, res) => {
+// 2. [POST] 신규 매니저 등록 (목표 좌수 포함)
+app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
-        const { storeName, managerName } = req.query;
-        if (!storeName) return res.status(400).json({ success: false, message: '매장명 필요' });
+        const { storeName, managerName, role, consignment, targetCount, isActive } = req.body;
 
-        const now = moment().tz('Asia/Seoul');
-        const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
-        const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
-        const collection = db.collection(jwasuCollectionName);
-        
-        const query = {
-            storeName: storeName,
-            date: { $gte: startOfThisMonth, $lte: endOfThisMonth }
-        };
-        if (managerName) query.managerName = managerName;
+        if (!storeName || !managerName) {
+            return res.status(400).json({ success: false, message: '매장명과 이름은 필수입니다.' });
+        }
 
-        const dailyRecords = await collection.find(query).sort({ date: -1 }).toArray();
-        res.json({ success: true, data: dailyRecords });
+        // 중복 체크
+        const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
+        if (exists) {
+            return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
+        }
+
+        await db.collection(staffCollectionName).insertOne({
+            storeName,
+            managerName,
+            role: role || '매니저',
+            consignment: consignment || 'N',
+            // [중요] 문자열로 들어올 수 있으므로 정수(Int)로 변환
+            targetCount: parseInt(targetCount) || 0,
+            isActive: isActive !== undefined ? isActive : true, // 기본값 ON
+            createdAt: new Date()
+        });
+
+        res.json({ success: true, message: '등록되었습니다.' });
+
     } catch (error) {
-        console.error('통계 조회 오류:', error);
-        res.status(500).json({ success: false, message: '통계 조회 실패' });
+        console.error('등록 오류:', error);
+        res.status(500).json({ success: false, message: '등록 중 오류 발생' });
     }
 });
 
+// 3. [PUT] 매니저 정보 수정 (목표 좌수, 직함 등 변경)
+app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { storeName, managerName, role, consignment, targetCount } = req.body;
+
+        // [중요] ObjectId 사용 시 상단에 const { ObjectId } = require('mongodb'); 필수
+        // 만약 선언이 안되어 있다면 require('mongodb').ObjectId(id) 사용
+        const result = await db.collection(staffCollectionName).updateOne(
+            { _id: new ObjectId(id) },
+            { 
+                $set: { 
+                    storeName,
+                    managerName,
+                    role,
+                    consignment,
+                    // [중요] 수정 시에도 숫자로 변환해서 저장
+                    targetCount: parseInt(targetCount) || 0,
+                    updatedAt: new Date()
+                } 
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ success: false, message: '대상을 찾을 수 없습니다.' });
+        }
+
+        res.json({ success: true, message: '수정되었습니다.' });
+
+    } catch (error) {
+        console.error('수정 오류:', error);
+        res.status(500).json({ success: false, message: '수정 중 오류 발생' });
+    }
+});
+
+// 4. [PUT] 매니저 상태 변경 (ON/OFF 토글)
+app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { isActive } = req.body; 
+
+        await db.collection(staffCollectionName).updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isActive: isActive } }
+        );
+        res.json({ success: true });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: '상태 변경 실패' });
+    }
+});
+
+// 5. [DELETE] 매니저 삭제
+app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
+        res.json({ success: true, message: '삭제되었습니다.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '삭제 실패' });
+    }
+});
+
+// 6. [GET] 월별 히스토리, 내 통계, 매출 관련 등 나머지 API들...
+// (이전 코드에서 유지할 부분 있으면 여기에 유지)
 // ==========================================
 // [섹션 - 매출 관련 (기존 유지)]
 // ==========================================
-// ... (매출 관련 코드는 변경 사항 없음, 기존 코드 그대로 사용) ...
 
 app.post('/api/sales/record', async (req, res) => {
     try {
@@ -1465,47 +1538,22 @@ app.get('/api/sales/live-count', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false }); }
 });
 
-// ==========================================
-// [섹션 D] Cafe24 매니저 관리 (기존 유지)
-// ==========================================
-// *주의: 여기서는 'cafe24_managers' 등의 별도 컬렉션 사용을 권장하지만, 
-// 기존 코드 호환성을 위해 변수명은 유지하되 오프라인 로직과 섞이지 않게 주의합니다.
 
-const cafe24ManagerCollection = 'managers'; // Cafe24용 컬렉션 명
 
-app.get('/api/managers', async (req, res) => {
-    try {
-        const { mall_id } = req.query;
-        const collection = db.collection(cafe24ManagerCollection);
-        const query = mall_id ? { mall_id: mall_id } : {};
-        const managers = await collection.find(query).toArray();
-        res.json({ success: true, managers: managers });
-    } catch (error) {
-        console.error('매니저 조회 오류:', error);
-        res.status(500).json({ success: false, message: '매니저 정보 조회 실패' });
-    }
-});
 
-app.post('/api/managers', async (req, res) => {
-    try {
-        const { mall_id, shop_url, client_id } = req.body; 
-        if (!mall_id) return res.status(400).json({ success: false, message: 'mall_id 필수' });
 
-        const collection = db.collection(cafe24ManagerCollection);
-        const result = await collection.findOneAndUpdate(
-            { mall_id: mall_id },
-            { 
-                $set: { mall_id, shop_url: shop_url || '', client_id: client_id || '', lastUpdated: new Date() },
-                $setOnInsert: { createdAt: new Date(), status: 'active' }
-            },
-            { upsert: true, returnDocument: 'after' }
-        );
-        res.json({ success: true, message: '저장 완료', data: result.value || result });
-    } catch (error) {
-        console.error('매니저 저장 오류:', error);
-        res.status(500).json({ success: false, message: '매니저 저장 실패' });
-    }
-});
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
