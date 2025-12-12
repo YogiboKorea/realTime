@@ -1122,8 +1122,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
     }
 });
-
-// 3. [GET] 대시보드 데이터 조회 (달성률 랭킹 / ON 필터링 적용)
+// 3. [GET] 대시보드 데이터 조회 (로직 변경: 기록이 있으면 OFF여도 표시)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
@@ -1133,63 +1132,87 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         const collection = db.collection(jwasuCollectionName);
         const staffCollection = db.collection(staffCollectionName);
 
-        // [Step 1] 활성 상태(ON)인 매니저 목록 가져오기
-        const activeStaffs = await staffCollection.find({ 
-            $or: [ { isActive: true }, { isActive: { $exists: false } } ] 
-        }).toArray();
+        // [Step 1] 모든 매니저 정보 가져오기 (OFF 포함 - 목표/직함 매칭용)
+        const allStaffs = await staffCollection.find().toArray();
+        
+        // 검색 최적화를 위한 맵(Map) 생성: "매장_이름" => 정보 객체
+        const staffMap = {};
+        const activeSet = new Set(); // 활성(ON) 매니저 목록
 
-        // 활성 매니저 식별용 Set
-        const activeSet = new Set(activeStaffs.map(s => `${s.storeName}_${s.managerName}`));
+        allStaffs.forEach(s => {
+            const key = `${s.storeName}_${s.managerName}`;
+            staffMap[key] = s;
+            
+            // 활성 상태 체크 (isActive가 없거나 true면 활성)
+            if (s.isActive !== false) {
+                activeSet.add(key);
+            }
+        });
 
-        // [Step 2] 기간 내 기록 조회
+        // [Step 2] 해당 기간의 기록 조회
         const records = await collection.find({ 
             date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
         const aggregates = {};
         
+        // [Step 3] 기록이 있는 데이터는 무조건 집계 (OFF 상태라도 과거 기록은 보여줌)
         records.forEach(record => {
             const mgr = record.managerName || '미지정';
             const uniqueKey = `${record.storeName}_${mgr}`;
+            
+            // 매니저 정보 찾기 (OFF된 사람도 allStaffs에 있으므로 정보 가져옴)
+            const info = staffMap[uniqueKey];
 
-            // [Step 3] 활성 매니저만 집계에 포함
-            if (activeSet.has(uniqueKey) || mgr === '미지정') {
-                if (!aggregates[uniqueKey]) {
-                    // 현재 매니저 정보 찾기 (목표 좌수 확인용)
-                    const currentInfo = activeStaffs.find(s => s.storeName === record.storeName && s.managerName === mgr);
-                    
-                    aggregates[uniqueKey] = { 
-                        storeName: record.storeName, 
-                        managerName: mgr,
-                        // 목표 좌수 가져오기 (없으면 0)
-                        targetCount: currentInfo ? (currentInfo.targetCount || 0) : 0, 
-                        count: 0, 
-                        rank: 0,
-                        rate: 0 // 달성률
-                    };
-                }
-                aggregates[uniqueKey].count += record.count;
+            if (!aggregates[uniqueKey]) {
+                aggregates[uniqueKey] = { 
+                    storeName: record.storeName, 
+                    managerName: mgr,
+                    // 스냅샷 정보 우선, 없으면 현재 정보 사용
+                    role: record.role || (info ? info.role : '-'),
+                    targetCount: info ? info.targetCount : 0, 
+                    targetMonthlySales: info ? (info.targetMonthlySales || 0) : 0,
+                    count: 0, 
+                    rank: 0,
+                    rate: 0
+                };
+            }
+            aggregates[uniqueKey].count += record.count;
+        });
+
+        // [Step 4] 기록은 없지만 "활성(ON)" 상태인 매니저를 0건으로 추가
+        // (현재 근무 중인 사람은 0건이어도 리스트에 나와야 함)
+        activeSet.forEach(key => {
+            if (!aggregates[key]) {
+                const info = staffMap[key];
+                aggregates[key] = {
+                    storeName: info.storeName,
+                    managerName: info.managerName,
+                    role: info.role || '-',
+                    targetCount: info.targetCount || 0,
+                    targetMonthlySales: info.targetMonthlySales || 0,
+                    count: 0,
+                    rank: 0,
+                    rate: 0
+                };
             }
         });
 
         const dashboardData = Object.values(aggregates);
 
-        // [Step 4] 달성률(%) 계산
+        // [Step 5] 달성률(%) 계산
         dashboardData.forEach(item => {
             if (item.targetCount > 0) {
-                // 소수점 1자리까지 계산
                 item.rate = parseFloat(((item.count / item.targetCount) * 100).toFixed(1));
             } else {
-                item.rate = 0; // 목표가 0이면 달성률 0 처리
+                item.rate = 0;
             }
         });
 
-        // [Step 5] 랭킹 정렬: 달성률(rate) 내림차순 -> 동점이면 카운트(count) 내림차순
+        // [Step 6] 랭킹 정렬 (달성률 높은 순 -> 카운트 많은 순)
         dashboardData.sort((a, b) => {
-            if (b.rate !== a.rate) {
-                return b.rate - a.rate; // 달성률 높은 순
-            }
-            return b.count - a.count; // 달성률 같으면 개수 많은 순
+            if (b.rate !== a.rate) return b.rate - a.rate;
+            return b.count - a.count;
         });
 
         // 순위 부여
