@@ -968,6 +968,7 @@ app.get('/api/clean-bots', async (req, res) => {
     }
 });
 
+
 /**
  * [좌수왕 서버 통합 라우트]
  * * 필수 요구사항:
@@ -993,6 +994,38 @@ const OFFLINE_STORES = [
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
 // ==========================================
 
+// [링크 접속용] 링크 ID로 매니저 정보 조회
+app.get('/api/jwasu/link/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: '잘못된 링크입니다.' });
+
+        const manager = await db.collection(staffCollectionName).findOne({ _id: new ObjectId(id) });
+        
+        if (!manager) {
+            return res.json({ success: false, message: '매니저 정보를 찾을 수 없습니다.' });
+        }
+
+        // 비활성화(OFF) 상태 체크
+        if (manager.isActive === false) {
+            return res.json({ 
+                success: false, 
+                message: '현재 비활성화된 링크입니다.', 
+                isInactive: true 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            storeName: manager.storeName, 
+            managerName: manager.managerName 
+        });
+    } catch (error) {
+        console.error('링크 조회 오류:', error);
+        res.status(500).json({ success: false, message: '링크 조회 실패' });
+    }
+});
+
 // 1. [POST] 좌수 카운트 증가 (정보 스냅샷 저장 기능 포함)
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
@@ -1017,10 +1050,12 @@ app.post('/api/jwasu/increment', async (req, res) => {
             $inc: { count: 1 },
             $set: { 
                 lastUpdated: new Date(),
-                // 정보가 있으면 저장, 없으면 기본값
+                // 정보가 있으면 저장, 없으면 기본값 (매출 목표도 스냅샷에 포함)
                 role: staffInfo ? staffInfo.role : '매니저',
                 consignment: staffInfo ? staffInfo.consignment : 'N',
-                targetCount: staffInfo ? staffInfo.targetCount : 0
+                targetCount: staffInfo ? staffInfo.targetCount : 0,
+                targetMonthlySales: staffInfo ? (staffInfo.targetMonthlySales || 0) : 0,
+                targetWeeklySales: staffInfo ? (staffInfo.targetWeeklySales || 0) : 0
             },
             $setOnInsert: { createdAt: new Date() }
         };
@@ -1120,14 +1155,15 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             // [Step 3] 활성 매니저만 집계에 포함
             if (activeSet.has(uniqueKey) || mgr === '미지정') {
                 if (!aggregates[uniqueKey]) {
-                    // 현재 매니저 정보 찾기 (최신 목표좌수 등을 표시하기 위함)
                     const currentInfo = activeStaffs.find(s => s.storeName === record.storeName && s.managerName === mgr);
                     
                     aggregates[uniqueKey] = { 
                         storeName: record.storeName, 
                         managerName: mgr,
                         role: record.role || (currentInfo ? currentInfo.role : '-'),
-                        targetCount: currentInfo ? currentInfo.targetCount : 0, // 목표는 최신 기준
+                        targetCount: currentInfo ? currentInfo.targetCount : 0,
+                        // 매출 목표도 Dashboard에 필요하다면 추가
+                        targetMonthlySales: currentInfo ? (currentInfo.targetMonthlySales || 0) : 0,
                         count: 0, 
                         rank: 0 
                     };
@@ -1162,28 +1198,23 @@ app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
 
-        // 1. 날짜 처리
         const startStr = startDate || new Date().toISOString().split('T')[0];
         const endStr = endDate || new Date().toISOString().split('T')[0];
         const startObj = new Date(startStr + 'T00:00:00.000Z'); 
         const endObj = new Date(endStr + 'T23:59:59.999Z');
         
         // A. 데이터 조회
-
-        // A-0. 활성 매니저 목록 조회
         const activeStaffs = await db.collection(staffCollectionName).find({
              $or: [ { isActive: true }, { isActive: { $exists: false } } ]
         }).toArray();
         const activeSet = new Set(activeStaffs.map(s => `${s.storeName}_${s.managerName}`));
 
-        // A-1. [매출] 조회
         let salesQuery = { createdAt: { $gte: startObj, $lte: endObj } };
         if (store && store !== 'all') {
             salesQuery.store = { $in: store.split(',') };
         }
         const salesData = await db.collection('sales').find(salesQuery).sort({ createdAt: -1 }).toArray();
 
-        // A-2. [좌수] 조회
         let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
         if (store && store !== 'all') {
             jwasuQuery.storeName = { $in: store.split(',') };
@@ -1193,7 +1224,6 @@ app.get('/api/jwasu/table', async (req, res) => {
         // B. 데이터 병합
         const report = [];
 
-        // 1. 좌수 데이터 추가 (활성 필터링 적용)
         jwasuList.forEach(j => {
             const mgrName = j.managerName || '미지정';
             const uniqueKey = `${j.storeName}_${mgrName}`;
@@ -1212,7 +1242,6 @@ app.get('/api/jwasu/table', async (req, res) => {
             }
         });
 
-        // 2. 매출 데이터 추가
         salesData.forEach(s => {
             let dateStr = startStr;
             if (s.createdAt) {
@@ -1280,15 +1309,14 @@ app.post('/api/managers', async (req, res) => {
 
 // ==========================================
 // [섹션 E] 관리자(Admin) 매니저 관리 API (등록/수정/삭제)
-// ★ 여기가 목표좌수 저장 및 수정의 핵심입니다 ★
-// * 수정: staffCollectionName 변수 대신 'jwasu_managers' 직접 사용 (ReferenceError 방지)
+// ★ 목표좌수, 월목표매출, 주목표매출 저장 및 수정 로직 반영 ★
 // ==========================================
 
 // 1. [GET] 매니저 전체 목록 조회
 app.get('/api/jwasu/admin/managers', async (req, res) => {
     try {
         // 이름순 정렬
-        const managers = await db.collection('jwasu_managers')
+        const managers = await db.collection(staffCollectionName)
             .find()
             .sort({ storeName: 1, managerName: 1 })
             .toArray();
@@ -1298,29 +1326,34 @@ app.get('/api/jwasu/admin/managers', async (req, res) => {
     }
 });
 
-// 2. [POST] 신규 매니저 등록 (목표 좌수 포함)
+// 2. [POST] 신규 매니저 등록 (목표 좌수/월매출/주매출 포함)
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
-        const { storeName, managerName, role, consignment, targetCount, isActive } = req.body;
+        const { 
+            storeName, managerName, role, consignment, 
+            targetCount, targetMonthlySales, targetWeeklySales, 
+            isActive 
+        } = req.body;
 
         if (!storeName || !managerName) {
             return res.status(400).json({ success: false, message: '매장명과 이름은 필수입니다.' });
         }
 
-        // 중복 체크
-        const exists = await db.collection('jwasu_managers').findOne({ storeName, managerName });
+        const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
         if (exists) {
             return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
         }
 
-        await db.collection('jwasu_managers').insertOne({
+        await db.collection(staffCollectionName).insertOne({
             storeName,
             managerName,
             role: role || '매니저',
             consignment: consignment || 'N',
-            // [중요] 문자열로 들어올 수 있으므로 정수(Int)로 변환
+            // [중요] 숫자 변환 (입력 안하면 0)
             targetCount: parseInt(targetCount) || 0,
-            isActive: isActive !== undefined ? isActive : true, // 기본값 ON
+            targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW] 월 목표 매출
+            targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW] 주 목표 매출
+            isActive: isActive !== undefined ? isActive : true,
             createdAt: new Date()
         });
 
@@ -1332,15 +1365,16 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
     }
 });
 
-// 3. [PUT] 매니저 정보 수정 (목표 좌수, 직함 등 변경)
+// 3. [PUT] 매니저 정보 수정
 app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { storeName, managerName, role, consignment, targetCount } = req.body;
+        const { 
+            storeName, managerName, role, consignment, 
+            targetCount, targetMonthlySales, targetWeeklySales 
+        } = req.body;
 
-        // [중요] ObjectId 사용 시 상단에 const { ObjectId } = require('mongodb'); 필수
-        // 만약 선언이 안되어 있다면 require('mongodb').ObjectId(id) 사용
-        const result = await db.collection('jwasu_managers').updateOne(
+        const result = await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
             { 
                 $set: { 
@@ -1348,8 +1382,10 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
                     managerName,
                     role,
                     consignment,
-                    // [중요] 수정 시에도 숫자로 변환해서 저장
+                    // [중요] 수정 시에도 숫자 변환
                     targetCount: parseInt(targetCount) || 0,
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW]
+                    targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW]
                     updatedAt: new Date()
                 } 
             }
@@ -1367,13 +1403,13 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     }
 });
 
-// 4. [PUT] 매니저 상태 변경 (ON/OFF 토글)
+// 4. [PUT] 매니저 상태 변경 (ON/OFF)
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
         const { isActive } = req.body; 
 
-        await db.collection('jwasu_managers').updateOne(
+        await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
             { $set: { isActive: isActive } }
         );
@@ -1388,19 +1424,17 @@ app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await db.collection('jwasu_managers').deleteOne({ _id: new ObjectId(id) });
+        await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
         res.json({ success: true, message: '삭제되었습니다.' });
     } catch (error) {
         res.status(500).json({ success: false, message: '삭제 실패' });
     }
 });
 
-// 6. [GET] 월별 히스토리, 내 통계, 매출 관련 등 나머지 API들...
-// (이전 코드에서 유지할 부분 있으면 여기에 유지)
+// 6. [GET] 나머지 API들...
 // ==========================================
 // [섹션 - 매출 관련 (기존 유지)]
 // ==========================================
-
 app.post('/api/sales/record', async (req, res) => {
     try {
         const { store, amount } = req.body;
@@ -1456,6 +1490,8 @@ app.get('/api/sales/live-count', async (req, res) => {
         res.json({ success: true, totalCount: total, lastUpdated: new Date() });
     } catch (e) { res.status(500).json({ success: false }); }
 });
+
+
 
 
 
