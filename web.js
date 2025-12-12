@@ -1122,110 +1122,89 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
     }
 });
-// 3. [GET] 대시보드 데이터 조회 (삭제된 매니저 제외, OFF는 기록 있으면 노출)
+// 3. [GET] 대시보드 데이터 조회 (수정됨: OFF인 사람은 아예 제외)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
+        // 1. 날짜 범위 설정
         const queryDate = req.query.date;
         const targetEndDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
         const targetStartDate = moment(targetEndDate).startOf('month').format('YYYY-MM-DD');
-        
+
+        // 2. [활성 매니저 명단]만 가져오기 (OFF인 사람은 여기서부터 탈락)
+        const managerCollection = db.collection('jwasu_managers');
+        // ★ 핵심: isActive가 true인 사람만 가져옴
+        const activeManagers = await managerCollection.find({ isActive: true }).toArray();
+
+        // 3. [실적 데이터] 가져오기
         const collection = db.collection(jwasuCollectionName);
-        const staffCollection = db.collection(staffCollectionName);
-
-        // [Step 1] DB에 등록된 '모든' 매니저 정보 가져오기 (OFF 포함)
-        const allStaffs = await staffCollection.find().toArray();
-        
-        // 매핑 최적화 & 활성 유저 분리
-        const staffMap = {};
-        const activeSet = new Set(); 
-
-        allStaffs.forEach(s => {
-            const key = `${s.storeName}_${s.managerName}`;
-            staffMap[key] = s;
-            
-            // 현재 ON(활성) 상태인 매니저만 따로 체크
-            if (s.isActive !== false) {
-                activeSet.add(key);
-            }
-        });
-
-        // [Step 2] 해당 기간의 좌수 기록 조회
         const records = await collection.find({ 
             date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
-        const aggregates = {};
-        
-        // [Step 3] 기록 집계
+        // 4. 데이터 병합 (Merge) - 활성 매니저 기준
+        const statsMap = {};
+
+        // (A) 활성 매니저를 기준으로 맵 생성 (실적이 0이어도 표시하기 위함)
+        activeManagers.forEach(mgr => {
+            const key = `${mgr.storeName}_${mgr.managerName}`;
+            statsMap[key] = {
+                storeName: mgr.storeName,
+                managerName: mgr.managerName,
+                role: mgr.role || '매니저',
+                targetCount: mgr.targetCount || 0,
+                count: 0, // 실적 초기화
+                rate: 0,
+                rank: 0
+            };
+        });
+
+        // (B) 실적 데이터 붓기 (단, 활성 매니저 맵에 있는 사람만!)
         records.forEach(record => {
-            const mgr = record.managerName || '미지정';
-            const uniqueKey = `${record.storeName}_${mgr}`;
-            
-            // ★ 핵심 수정: 현재 매니저 목록(staffMap)에 없는 사람은 '삭제된 사람'이므로 제외
-            // (미지정 데이터는 일단 보여주거나, 원하시면 제외 가능)
-            if (mgr !== '미지정' && !staffMap[uniqueKey]) {
-                return; // 삭제된 매니저의 기록은 건너뜀
-            }
+            // 데이터에 저장된 이름 (구버전 호환)
+            const staffName = record.staffName || record.managerName; 
+            if (!staffName) return;
 
-            // 매니저 정보 가져오기 (삭제되지 않았다면 무조건 있음)
-            const info = staffMap[uniqueKey];
+            const key = `${record.storeName}_${staffName}`;
 
-            if (!aggregates[uniqueKey]) {
-                aggregates[uniqueKey] = { 
-                    storeName: record.storeName, 
-                    managerName: mgr,
-                    // 정보가 있으면 그 정보를 쓰고, 없으면(미지정 등) 기록된 정보 사용
-                    role: info ? info.role : (record.role || '-'),
-                    targetCount: info ? info.targetCount : 0, 
-                    targetMonthlySales: info ? (info.targetMonthlySales || 0) : 0,
-                    count: 0, 
-                    rank: 0,
-                    rate: 0
-                };
-            }
-            aggregates[uniqueKey].count += record.count;
-        });
-
-        // [Step 4] 기록은 없지만 "활성(ON)" 상태인 매니저는 0건으로 리스트에 추가
-        activeSet.forEach(key => {
-            if (!aggregates[key]) {
-                const info = staffMap[key];
-                aggregates[key] = {
-                    storeName: info.storeName,
-                    managerName: info.managerName,
-                    role: info.role || '-',
-                    targetCount: info.targetCount || 0,
-                    targetMonthlySales: info.targetMonthlySales || 0,
-                    count: 0,
-                    rank: 0,
-                    rate: 0
-                };
+            // ★ 핵심 필터링: statsMap(활성 명단)에 있는 사람일 때만 카운트 더함
+            // 명단에 없으면(OFF 상태면) 이 데이터는 무시됨 -> 결과 페이지에 안 나옴
+            if (statsMap[key]) {
+                statsMap[key].count += record.count;
             }
         });
 
-        const dashboardData = Object.values(aggregates);
+        // 5. 배열 변환 및 달성률 계산
+        let dashboardData = Object.values(statsMap);
 
-        // [Step 5] 달성률(%) 계산
         dashboardData.forEach(item => {
             if (item.targetCount > 0) {
-                item.rate = parseFloat(((item.count / item.targetCount) * 100).toFixed(1));
+                item.rate = Math.round((item.count / item.targetCount) * 100);
             } else {
                 item.rate = 0;
             }
         });
 
-        // [Step 6] 랭킹 정렬 (달성률 높은 순 -> 동점 시 카운트 많은 순)
+        // 6. 랭킹 정렬 (실적 높은 순 -> 달성률 높은 순)
         dashboardData.sort((a, b) => {
-            if (b.rate !== a.rate) return b.rate - a.rate;
-            return b.count - a.count;
+            if (b.count !== a.count) return b.count - a.count;
+            return b.rate - a.rate;
         });
 
-        // 순위 번호 부여
-        dashboardData.forEach((item, index) => { item.rank = index + 1; });
-        
+        // 7. 순위 매기기
+        dashboardData.forEach((item, index) => {
+            item.rank = index + 1;
+        });
+
+        // 8. 총합 계산 (화면에 표시된 사람들의 합계만)
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
-        res.json({ success: true, startDate: targetStartDate, endDate: targetEndDate, totalCount, data: dashboardData });
+        res.json({ 
+            success: true, 
+            startDate: targetStartDate, 
+            endDate: targetEndDate, 
+            totalCount: totalCount,
+            data: dashboardData 
+        });
 
     } catch (error) {
         console.error('대시보드 조회 오류:', error);
