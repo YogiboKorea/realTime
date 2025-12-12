@@ -1122,7 +1122,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
     }
 });
-// 3. [GET] 대시보드 데이터 조회 (로직 변경: 기록이 있으면 OFF여도 표시)
+// 3. [GET] 대시보드 데이터 조회 (삭제된 매니저 제외, OFF는 기록 있으면 노출)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
@@ -1132,44 +1132,50 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         const collection = db.collection(jwasuCollectionName);
         const staffCollection = db.collection(staffCollectionName);
 
-        // [Step 1] 모든 매니저 정보 가져오기 (OFF 포함 - 목표/직함 매칭용)
+        // [Step 1] DB에 등록된 '모든' 매니저 정보 가져오기 (OFF 포함)
         const allStaffs = await staffCollection.find().toArray();
         
-        // 검색 최적화를 위한 맵(Map) 생성: "매장_이름" => 정보 객체
+        // 매핑 최적화 & 활성 유저 분리
         const staffMap = {};
-        const activeSet = new Set(); // 활성(ON) 매니저 목록
+        const activeSet = new Set(); 
 
         allStaffs.forEach(s => {
             const key = `${s.storeName}_${s.managerName}`;
             staffMap[key] = s;
             
-            // 활성 상태 체크 (isActive가 없거나 true면 활성)
+            // 현재 ON(활성) 상태인 매니저만 따로 체크
             if (s.isActive !== false) {
                 activeSet.add(key);
             }
         });
 
-        // [Step 2] 해당 기간의 기록 조회
+        // [Step 2] 해당 기간의 좌수 기록 조회
         const records = await collection.find({ 
             date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
         const aggregates = {};
         
-        // [Step 3] 기록이 있는 데이터는 무조건 집계 (OFF 상태라도 과거 기록은 보여줌)
+        // [Step 3] 기록 집계
         records.forEach(record => {
             const mgr = record.managerName || '미지정';
             const uniqueKey = `${record.storeName}_${mgr}`;
             
-            // 매니저 정보 찾기 (OFF된 사람도 allStaffs에 있으므로 정보 가져옴)
+            // ★ 핵심 수정: 현재 매니저 목록(staffMap)에 없는 사람은 '삭제된 사람'이므로 제외
+            // (미지정 데이터는 일단 보여주거나, 원하시면 제외 가능)
+            if (mgr !== '미지정' && !staffMap[uniqueKey]) {
+                return; // 삭제된 매니저의 기록은 건너뜀
+            }
+
+            // 매니저 정보 가져오기 (삭제되지 않았다면 무조건 있음)
             const info = staffMap[uniqueKey];
 
             if (!aggregates[uniqueKey]) {
                 aggregates[uniqueKey] = { 
                     storeName: record.storeName, 
                     managerName: mgr,
-                    // 스냅샷 정보 우선, 없으면 현재 정보 사용
-                    role: record.role || (info ? info.role : '-'),
+                    // 정보가 있으면 그 정보를 쓰고, 없으면(미지정 등) 기록된 정보 사용
+                    role: info ? info.role : (record.role || '-'),
                     targetCount: info ? info.targetCount : 0, 
                     targetMonthlySales: info ? (info.targetMonthlySales || 0) : 0,
                     count: 0, 
@@ -1180,8 +1186,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             aggregates[uniqueKey].count += record.count;
         });
 
-        // [Step 4] 기록은 없지만 "활성(ON)" 상태인 매니저를 0건으로 추가
-        // (현재 근무 중인 사람은 0건이어도 리스트에 나와야 함)
+        // [Step 4] 기록은 없지만 "활성(ON)" 상태인 매니저는 0건으로 리스트에 추가
         activeSet.forEach(key => {
             if (!aggregates[key]) {
                 const info = staffMap[key];
@@ -1209,13 +1214,13 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             }
         });
 
-        // [Step 6] 랭킹 정렬 (달성률 높은 순 -> 카운트 많은 순)
+        // [Step 6] 랭킹 정렬 (달성률 높은 순 -> 동점 시 카운트 많은 순)
         dashboardData.sort((a, b) => {
             if (b.rate !== a.rate) return b.rate - a.rate;
             return b.count - a.count;
         });
 
-        // 순위 부여
+        // 순위 번호 부여
         dashboardData.forEach((item, index) => { item.rank = index + 1; });
         
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
