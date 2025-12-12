@@ -968,108 +968,6 @@ app.get('/api/clean-bots', async (req, res) => {
     }
 });
 
-
-// ==========================================
-// [전역 변수 및 설정]
-// ==========================================
-const jwasuCollectionName = 'offline_jwasu';   // 좌수 데이터
-const managerCollectionName = 'managers';      // 매니저 데이터
-const adminCollectionName = 'admin_managers';  // 관리자 링크
-
-// 관리 대상 매장 리스트
-const OFFLINE_STORES = [
-    "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
-    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
-];
-
-// ==========================================
-// [섹션 E] 관리자(Admin) 페이지용 API
-// ==========================================
-
-// 1. [GET] 등록된 매니저 목록 조회
-app.get('/api/jwasu/admin/managers', async (req, res) => {
-    try {
-        const collection = db.collection(adminCollectionName);
-        const managers = await collection.find({}).sort({ createdAt: -1 }).toArray();
-        res.json({ success: true, managers: managers });
-    } catch (error) {
-        console.error('관리자 목록 조회 오류:', error);
-        res.status(500).json({ success: false, message: '목록을 불러오지 못했습니다.' });
-    }
-});
-
-// 2. [POST] 신규 매니저(링크) 수동 등록
-app.post('/api/jwasu/admin/manager', async (req, res) => {
-    try {
-        const { storeName, managerName } = req.body;
-        if (!storeName || !managerName) {
-            return res.status(400).json({ success: false, message: '매장명과 매니저 이름은 필수입니다.' });
-        }
-        const collection = db.collection(adminCollectionName);
-        const exists = await collection.findOne({ storeName, managerName });
-        if (exists) return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
-
-        await collection.insertOne({ storeName, managerName, createdAt: new Date() });
-        res.json({ success: true, message: '매니저가 등록되었습니다.' });
-    } catch (error) {
-        console.error('매니저 등록 오류:', error);
-        res.status(500).json({ success: false, message: '등록 중 오류가 발생했습니다.' });
-    }
-});
-
-// 3. [DELETE] 매니저(링크) 삭제
-app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const adminCollection = db.collection(adminCollectionName);
-        const dataCollection = db.collection(jwasuCollectionName);
-
-        const targetManager = await adminCollection.findOne({ _id: new ObjectId(id) });
-        if (!targetManager) return res.status(404).json({ success: false, message: '삭제할 대상을 찾을 수 없습니다.' });
-
-        // 해당 매니저의 기록 삭제
-        const deleteDataResult = await dataCollection.deleteMany({
-            storeName: targetManager.storeName,
-            managerName: targetManager.managerName
-        });
-
-        // 링크 삭제
-        const deleteLinkResult = await adminCollection.deleteOne({ _id: new ObjectId(id) });
-
-        if (deleteLinkResult.deletedCount === 1) {
-            res.json({ success: true, message: `기록 ${deleteDataResult.deletedCount}건이 모두 삭제되었습니다.` });
-        } else {
-            res.status(404).json({ success: false, message: '링크 삭제 중 문제가 발생했습니다.' });
-        }
-    } catch (error) {
-        console.error('삭제 오류:', error);
-        res.status(500).json({ success: false, message: '삭제 처리 중 오류 발생' });
-    }
-});
-
-// 4. [GET] 링크 ID로 정보 조회
-app.get('/api/jwasu/link/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: '잘못된 링크 형식입니다.' });
-
-        const info = await db.collection(adminCollectionName).findOne({ _id: new ObjectId(id) });
-        if (info) {
-            res.json({ success: true, storeName: info.storeName, managerName: info.managerName });
-        } else {
-            res.status(404).json({ success: false, message: '유효하지 않은 링크입니다.' });
-        }
-    } catch (error) {
-        console.error('링크 조회 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류' });
-    }
-});
-
-
-
-
-
-
 /**
  * [좌수왕 서버 통합 라우트]
  * * 필수 요구사항:
@@ -1081,9 +979,15 @@ app.get('/api/jwasu/link/:id', async (req, res) => {
 // ==========================================
 // [설정] 컬렉션 이름 정의
 // ==========================================
+const jwasuCollectionName = 'offline_jwasu';      // [좌수] 일별 카운트 기록
 const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매니저 정보 (Admin 등록)
 const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니저 컬렉션
 
+// 관리 대상 매장 리스트
+const OFFLINE_STORES = [
+    "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
+    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
+];
 
 // ==========================================
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
@@ -1377,13 +1281,14 @@ app.post('/api/managers', async (req, res) => {
 // ==========================================
 // [섹션 E] 관리자(Admin) 매니저 관리 API (등록/수정/삭제)
 // ★ 여기가 목표좌수 저장 및 수정의 핵심입니다 ★
+// * 수정: staffCollectionName 변수 대신 'jwasu_managers' 직접 사용 (ReferenceError 방지)
 // ==========================================
 
 // 1. [GET] 매니저 전체 목록 조회
 app.get('/api/jwasu/admin/managers', async (req, res) => {
     try {
         // 이름순 정렬
-        const managers = await db.collection(staffCollectionName)
+        const managers = await db.collection('jwasu_managers')
             .find()
             .sort({ storeName: 1, managerName: 1 })
             .toArray();
@@ -1403,12 +1308,12 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
         }
 
         // 중복 체크
-        const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
+        const exists = await db.collection('jwasu_managers').findOne({ storeName, managerName });
         if (exists) {
             return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
         }
 
-        await db.collection(staffCollectionName).insertOne({
+        await db.collection('jwasu_managers').insertOne({
             storeName,
             managerName,
             role: role || '매니저',
@@ -1435,7 +1340,7 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
 
         // [중요] ObjectId 사용 시 상단에 const { ObjectId } = require('mongodb'); 필수
         // 만약 선언이 안되어 있다면 require('mongodb').ObjectId(id) 사용
-        const result = await db.collection(staffCollectionName).updateOne(
+        const result = await db.collection('jwasu_managers').updateOne(
             { _id: new ObjectId(id) },
             { 
                 $set: { 
@@ -1468,7 +1373,7 @@ app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
         const { id } = req.params;
         const { isActive } = req.body; 
 
-        await db.collection(staffCollectionName).updateOne(
+        await db.collection('jwasu_managers').updateOne(
             { _id: new ObjectId(id) },
             { $set: { isActive: isActive } }
         );
@@ -1483,7 +1388,7 @@ app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
+        await db.collection('jwasu_managers').deleteOne({ _id: new ObjectId(id) });
         res.json({ success: true, message: '삭제되었습니다.' });
     } catch (error) {
         res.status(500).json({ success: false, message: '삭제 실패' });
