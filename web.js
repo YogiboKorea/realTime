@@ -1374,79 +1374,74 @@ app.get('/api/jwasu/admin/managers', async (req, res) => {
 });
 
 // 2. [POST] 신규 매니저 등록 (목표 좌수/월매출/주매출 포함)
+// 1. [POST] 매니저 등록 API (수정됨)
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { 
             storeName, managerName, role, consignment, 
-            targetCount, targetMonthlySales, targetWeeklySales, 
+            targetCount, targetMonthlySales, targetWeeklySales, // [NEW] 추가된 필드들
             isActive 
         } = req.body;
 
         if (!storeName || !managerName) {
-            return res.status(400).json({ success: false, message: '매장명과 이름은 필수입니다.' });
+            return res.status(400).json({ success: false, message: '필수 정보 누락' });
         }
 
-        const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
-        if (exists) {
-            return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
-        }
+        const collection = db.collection('jwasu_managers');
 
-        await db.collection(staffCollectionName).insertOne({
+        await collection.insertOne({
             storeName,
             managerName,
             role: role || '매니저',
             consignment: consignment || 'N',
-            // [중요] 숫자 변환 (입력 안하면 0)
             targetCount: parseInt(targetCount) || 0,
-            targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW] 월 목표 매출
-            targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW] 주 목표 매출
-            isActive: isActive !== undefined ? isActive : true,
+            targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW] 월매출 목표
+            targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW] 주매출 목표
+            isActive: isActive !== undefined ? isActive : true,    // 기본값 ON
             createdAt: new Date()
         });
 
-        res.json({ success: true, message: '등록되었습니다.' });
+        res.json({ success: true, message: '등록 성공' });
 
     } catch (error) {
-        console.error('등록 오류:', error);
-        res.status(500).json({ success: false, message: '등록 중 오류 발생' });
+        console.error(error);
+        res.status(500).json({ success: false, message: '등록 실패' });
     }
 });
 
-// 3. [PUT] 매니저 정보 수정
+// 2. [PUT] 매니저 정보 전체 수정 API (수정됨)
 app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { 
             storeName, managerName, role, consignment, 
-            targetCount, targetMonthlySales, targetWeeklySales 
+            targetCount, targetMonthlySales, targetWeeklySales // [NEW]
         } = req.body;
 
-        const result = await db.collection(staffCollectionName).updateOne(
+        const collection = db.collection('jwasu_managers');
+        // const { ObjectId } = require('mongodb'); // 필요시 상단 선언 확인
+
+        await collection.updateOne(
             { _id: new ObjectId(id) },
             { 
-                $set: { 
+                $set: {
                     storeName,
                     managerName,
                     role,
                     consignment,
-                    // [중요] 수정 시에도 숫자 변환
                     targetCount: parseInt(targetCount) || 0,
                     targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW]
                     targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW]
                     updatedAt: new Date()
-                } 
+                }
             }
         );
 
-        if (result.matchedCount === 0) {
-            return res.status(404).json({ success: false, message: '대상을 찾을 수 없습니다.' });
-        }
-
-        res.json({ success: true, message: '수정되었습니다.' });
+        res.json({ success: true, message: '수정 완료' });
 
     } catch (error) {
-        console.error('수정 오류:', error);
-        res.status(500).json({ success: false, message: '수정 중 오류 발생' });
+        console.error(error);
+        res.status(500).json({ success: false, message: '수정 실패' });
     }
 });
 
@@ -1454,15 +1449,18 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
-        const { isActive } = req.body; 
+        const { isActive } = req.body; // true or false
 
-        await db.collection(staffCollectionName).updateOne(
+        const collection = db.collection('jwasu_managers');
+
+        await collection.updateOne(
             { _id: new ObjectId(id) },
             { $set: { isActive: isActive } }
         );
-        res.json({ success: true });
 
+        res.json({ success: true, message: '상태 변경 완료' });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ success: false, message: '상태 변경 실패' });
     }
 });
