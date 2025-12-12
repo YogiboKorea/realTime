@@ -1070,6 +1070,20 @@ app.get('/api/jwasu/link/:id', async (req, res) => {
 
 
 
+/**
+ * [좌수왕 서버 통합 라우트]
+ * * 필수 요구사항:
+ * 1. 상단에 const { ObjectId } = require('mongodb'); 가 선언되어 있어야 합니다.
+ * 2. db 변수는 MongoDB 데이터베이스 연결 객체여야 합니다.
+ * 3. moment-timezone 라이브러리가 로드되어 있어야 합니다.
+ */
+
+// ==========================================
+// [설정] 컬렉션 이름 정의
+// ==========================================
+const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매니저 정보 (Admin 등록)
+const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니저 컬렉션
+
 
 // ==========================================
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
