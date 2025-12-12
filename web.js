@@ -1123,7 +1123,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회 (ON/OFF 필터링 적용)
+// 3. [GET] 대시보드 데이터 조회 (달성률 랭킹 / ON 필터링 적용)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
@@ -1155,17 +1155,17 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             // [Step 3] 활성 매니저만 집계에 포함
             if (activeSet.has(uniqueKey) || mgr === '미지정') {
                 if (!aggregates[uniqueKey]) {
+                    // 현재 매니저 정보 찾기 (목표 좌수 확인용)
                     const currentInfo = activeStaffs.find(s => s.storeName === record.storeName && s.managerName === mgr);
                     
                     aggregates[uniqueKey] = { 
                         storeName: record.storeName, 
                         managerName: mgr,
-                        role: record.role || (currentInfo ? currentInfo.role : '-'),
-                        targetCount: currentInfo ? currentInfo.targetCount : 0,
-                        // 매출 목표도 Dashboard에 필요하다면 추가
-                        targetMonthlySales: currentInfo ? (currentInfo.targetMonthlySales || 0) : 0,
+                        // 목표 좌수 가져오기 (없으면 0)
+                        targetCount: currentInfo ? (currentInfo.targetCount || 0) : 0, 
                         count: 0, 
-                        rank: 0 
+                        rank: 0,
+                        rate: 0 // 달성률
                     };
                 }
                 aggregates[uniqueKey].count += record.count;
@@ -1173,8 +1173,28 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         });
 
         const dashboardData = Object.values(aggregates);
-        dashboardData.sort((a, b) => b.count - a.count);
+
+        // [Step 4] 달성률(%) 계산
+        dashboardData.forEach(item => {
+            if (item.targetCount > 0) {
+                // 소수점 1자리까지 계산
+                item.rate = parseFloat(((item.count / item.targetCount) * 100).toFixed(1));
+            } else {
+                item.rate = 0; // 목표가 0이면 달성률 0 처리
+            }
+        });
+
+        // [Step 5] 랭킹 정렬: 달성률(rate) 내림차순 -> 동점이면 카운트(count) 내림차순
+        dashboardData.sort((a, b) => {
+            if (b.rate !== a.rate) {
+                return b.rate - a.rate; // 달성률 높은 순
+            }
+            return b.count - a.count; // 달성률 같으면 개수 많은 순
+        });
+
+        // 순위 부여
         dashboardData.forEach((item, index) => { item.rank = index + 1; });
+        
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
         res.json({ success: true, startDate: targetStartDate, endDate: targetEndDate, totalCount, data: dashboardData });
@@ -1184,7 +1204,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
     }
 });
-
 // 4. [GET] 매장 리스트 조회
 app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
