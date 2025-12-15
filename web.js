@@ -987,7 +987,7 @@ const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니�
 // 관리 대상 매장 리스트
 const OFFLINE_STORES = [
     "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
-    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
+    "스타필드고양", "스타필드하남", "현대미아", "현대울산","롯데광복","광주신세계","대구신세계","현대중동","롯데평촌"
 ];
 
 // ==========================================
@@ -1583,6 +1583,75 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
 });
 
 
+// ==========================================
+// [섹션 F] 엑셀 데이터 일괄 업로드 API (추가)
+// ==========================================
+app.post('/api/jwasu/upload-excel', async (req, res) => {
+    try {
+        const { data } = req.body; // 프론트에서 변환된 배열 [{date, storeName, managerName, count}, ...]
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
+        }
+
+        const jwasuCollection = db.collection('offline_jwasu');
+        const staffCollection = db.collection('jwasu_managers');
+
+        // 1. 매니저 정보 미리 로딩 (스냅샷 저장을 위해)
+        const allStaffs = await staffCollection.find().toArray();
+        const staffMap = {};
+        allStaffs.forEach(s => {
+            // 키 생성: "매장명_이름" (공백 제거 등 전처리 추천하나 여기선 그대로 사용)
+            staffMap[`${s.storeName}_${s.managerName}`] = s;
+        });
+
+        // 2. Bulk Write 작업 생성
+        const operations = data.map(item => {
+            const dateStr = item.date;       // "YYYY-MM-DD"
+            const storeName = item.storeName; 
+            const managerName = item.managerName;
+            const count = parseInt(item.count) || 0;
+
+            // 매니저 정보 매칭 (현재 DB에 있는 정보 가져오기)
+            const staffInfo = staffMap[`${storeName}_${managerName}`];
+
+            return {
+                updateOne: {
+                    filter: { date: dateStr, storeName: storeName, managerName: managerName },
+                    update: {
+                        $set: {
+                            count: count,
+                            lastUpdated: new Date(),
+                            // 스냅샷 정보 저장 (이 시점의 직급/목표 등)
+                            role: staffInfo ? staffInfo.role : '매니저',
+                            consignment: staffInfo ? staffInfo.consignment : 'N',
+                            targetCount: staffInfo ? staffInfo.targetCount : 0,
+                            targetMonthlySales: staffInfo ? (staffInfo.targetMonthlySales || 0) : 0,
+                            targetWeeklySales: staffInfo ? (staffInfo.targetWeeklySales || 0) : 0
+                        },
+                        $setOnInsert: { createdAt: new Date() }
+                    },
+                    upsert: true // 없으면 Insert, 있으면 Update
+                }
+            };
+        });
+
+        // 3. DB 실행
+        if (operations.length > 0) {
+            const result = await jwasuCollection.bulkWrite(operations);
+            res.json({ 
+                success: true, 
+                message: `총 ${operations.length}건 처리 완료 (수정: ${result.modifiedCount}, 신규: ${result.upsertedCount})` 
+            });
+        } else {
+            res.json({ success: true, message: '처리할 데이터가 없습니다.' });
+        }
+
+    } catch (error) {
+        console.error('엑셀 업로드 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
 
 
 
