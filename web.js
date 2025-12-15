@@ -1587,7 +1587,9 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
     }
 });
 
-// 9. [POST] 엑셀 데이터 일괄 업로드 (이름 기준 매핑)
+// ==========================================
+// [섹션 F] 엑셀 데이터 일괄 업로드 API (최종 수정: 이름 기준 강제 매칭)
+// ==========================================
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
@@ -1596,38 +1598,44 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
             return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
         }
 
-        const jwasuCollection = db.collection(jwasuCollectionName);
-        const staffCollection = db.collection(staffCollectionName);
+        const jwasuCollection = db.collection(jwasuCollectionName); // offline_jwasu
+        const staffCollection = db.collection(staffCollectionName); // jwasu_managers
 
-        // 1. 매니저 정보 미리 로딩 (이름 기준 Map 생성)
+        // 1. DB에 있는 매니저 정보 로딩 (이름 기준 Map 생성)
         const allStaffs = await staffCollection.find().toArray();
         const staffMap = {};
         
         allStaffs.forEach(s => {
-            // 이름의 공백을 제거해서 키로 사용
+            // 이름의 띄어쓰기 제거 후 키로 사용 (예: "한 철우" -> "한철우")
             if (s.managerName) {
-                const cleanName = s.managerName.replace(/\s+/g, '').trim();
+                const cleanName = String(s.managerName).replace(/\s+/g, '').trim();
                 staffMap[cleanName] = s;
             }
         });
 
         // 2. Bulk Write 작업 생성
-        const operations = [];
+        const dailyOperations = [];
+        const managerUpdates = new Map(); // 매니저 원장 업데이트용
         
         data.forEach(item => {
             let excelStore = item.storeName || '';
             let excelName = item.managerName || '미지정';
             const dateStr = item.date;
             const count = parseInt(item.count) || 0;
+            const target = parseInt(item.target) || 0; // 엑셀의 450
 
+            // 엑셀 이름 정리
             const cleanExcelName = String(excelName).replace(/\s+/g, '').trim();
+            
+            // ★ [핵심] 이름으로 매니저 찾기
             const staffInfo = staffMap[cleanExcelName];
 
-            // DB에 등록된 매니저라면, DB의 정보를 우선 사용 (자동 보정)
+            // DB에 있는 매니저라면 DB의 정확한 매장명 사용 (하남 스타필드 -> 스타필드하남)
             const finalStoreName = staffInfo ? staffInfo.storeName : excelStore;
             const finalManagerName = staffInfo ? staffInfo.managerName : excelName;
 
-            operations.push({
+            // A. 일별 기록 업데이트 (offline_jwasu)
+            dailyOperations.push({
                 updateOne: {
                     filter: { 
                         date: dateStr, 
@@ -1640,7 +1648,9 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
                             lastUpdated: new Date(),
                             role: staffInfo ? staffInfo.role : '매니저',
                             consignment: staffInfo ? staffInfo.consignment : 'N',
-                            targetCount: staffInfo ? staffInfo.targetCount : 0,
+                            
+                            // [중요] 엑셀 목표값(450)이 있으면 무조건 덮어씀
+                            targetCount: target > 0 ? target : (staffInfo ? staffInfo.targetCount : 0),
                             targetMonthlySales: staffInfo ? (staffInfo.targetMonthlySales || 0) : 0,
                             targetWeeklySales: staffInfo ? (staffInfo.targetWeeklySales || 0) : 0
                         },
@@ -1649,24 +1659,45 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
                     upsert: true
                 }
             });
+
+            // B. 매니저 원장 정보 업데이트 (jwasu_managers)
+            // 엑셀에 목표(450)가 있으면, 관리자 페이지에 보이는 정보도 450으로 바꿈
+            if (target > 0 && staffInfo) {
+                // 중복 업데이트 방지를 위해 Map에 저장 (ID 기준)
+                managerUpdates.set(staffInfo._id.toString(), target);
+            }
         });
 
-        if (operations.length > 0) {
-            const result = await jwasuCollection.bulkWrite(operations);
-            res.json({ 
-                success: true, 
-                message: `총 ${operations.length}건 처리 완료` 
-            });
-        } else {
-            res.json({ success: true, message: '처리할 유효 데이터가 없습니다.' });
+        // 3. DB 실행 (일별 기록)
+        let msg = '';
+        if (dailyOperations.length > 0) {
+            await jwasuCollection.bulkWrite(dailyOperations);
+            msg += `일별 데이터 ${dailyOperations.length}건 갱신. `;
         }
+
+        // 4. DB 실행 (매니저 정보)
+        if (managerUpdates.size > 0) {
+            const mgrOps = [];
+            managerUpdates.forEach((newTarget, mgrId) => {
+                mgrOps.push({
+                    updateOne: {
+                        filter: { _id: new ObjectId(mgrId) },
+                        update: { $set: { targetCount: newTarget } }
+                    }
+                });
+            });
+            await staffCollection.bulkWrite(mgrOps);
+            msg += `매니저 ${mgrOps.length}명의 목표 정보 최신화 완료.`;
+        }
+
+        console.log("업로드 완료:", msg);
+        res.json({ success: true, message: msg });
 
     } catch (error) {
         console.error('엑셀 업로드 오류:', error);
         res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' });
     }
 });
-
 
 
 
