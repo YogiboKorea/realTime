@@ -969,6 +969,9 @@ app.get('/api/clean-bots', async (req, res) => {
 });
 
 
+
+
+
 /**
  * [좌수왕 서버 통합 라우트]
  * * 필수 요구사항:
@@ -987,7 +990,7 @@ const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니�
 // 관리 대상 매장 리스트
 const OFFLINE_STORES = [
     "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
-    "스타필드고양", "스타필드하남", "현대미아", "현대울산","롯데광복","광주신세계","대구신세계","현대중동","롯데평촌"
+    "스타필드고양", "스타필드하남", "현대미아", "현대울산"
 ];
 
 // ==========================================
@@ -1026,7 +1029,7 @@ app.get('/api/jwasu/link/:id', async (req, res) => {
     }
 });
 
-// 1. [POST] 좌수 카운트 증가 (정보 스냅샷 저장 기능 포함)
+// 1. [POST] 좌수 카운트 증가
 app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
@@ -1043,14 +1046,12 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const collection = db.collection(jwasuCollectionName);
         const staffCollection = db.collection(staffCollectionName);
 
-        // [중요] 카운트 당시의 매니저 정보(직함, 목표 등)를 조회하여 스냅샷으로 남김
         const staffInfo = await staffCollection.findOne({ storeName: storeName, managerName: mgrName });
 
         const updateData = {
             $inc: { count: 1 },
             $set: { 
                 lastUpdated: new Date(),
-                // 정보가 있으면 저장, 없으면 기본값 (매출 목표도 스냅샷에 포함)
                 role: staffInfo ? staffInfo.role : '매니저',
                 consignment: staffInfo ? staffInfo.consignment : 'N',
                 targetCount: staffInfo ? staffInfo.targetCount : 0,
@@ -1060,7 +1061,6 @@ app.post('/api/jwasu/increment', async (req, res) => {
             $setOnInsert: { createdAt: new Date() }
         };
 
-        // 1. 카운트 증가 (Upsert)
         const result = await collection.findOneAndUpdate(
             { date: todayStr, storeName: storeName, managerName: mgrName },
             updateData,
@@ -1070,7 +1070,6 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const updatedDoc = result.value || result; 
         const todayCount = updatedDoc.count;
 
-        // 2. 월간 누적 합계 계산
         const pipeline = [
             { $match: { storeName: storeName, managerName: mgrName, date: { $gte: startOfMonth, $lte: todayStr } } },
             { $group: { _id: null, total: { $sum: "$count" } } }
@@ -1122,95 +1121,110 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
     }
 });
-// 3. [GET] 대시보드 데이터 조회 (수정됨: OFF인 사람은 아예 제외)
+
+// 3. [GET] 대시보드 데이터 조회 (수정: OFF 상태면 결과에서 제외)
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
-        // 1. 날짜 범위 설정
         const queryDate = req.query.date;
         const targetEndDate = queryDate ? queryDate : moment().tz('Asia/Seoul').format('YYYY-MM-DD');
         const targetStartDate = moment(targetEndDate).startOf('month').format('YYYY-MM-DD');
-
-        // 2. [활성 매니저 명단]만 가져오기 (OFF인 사람은 여기서부터 탈락)
-        const managerCollection = db.collection('jwasu_managers');
-        // ★ 핵심: isActive가 true인 사람만 가져옴
-        const activeManagers = await managerCollection.find({ isActive: true }).toArray();
-
-        // 3. [실적 데이터] 가져오기
+        
         const collection = db.collection(jwasuCollectionName);
+        const staffCollection = db.collection(staffCollectionName);
+
+        // 1. 모든 매니저 정보 로딩
+        const allStaffs = await staffCollection.find().toArray();
+        const staffMap = {};
+        const activeSet = new Set();
+
+        allStaffs.forEach(s => {
+            const key = `${s.storeName}_${s.managerName}`;
+            staffMap[key] = s;
+            // 활성 상태인 매니저만 Set에 등록
+            if (s.isActive !== false) {
+                activeSet.add(key);
+            }
+        });
+
+        // 2. 기록 조회
         const records = await collection.find({ 
             date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
-        // 4. 데이터 병합 (Merge) - 활성 매니저 기준
-        const statsMap = {};
+        const aggregates = {};
+        
+        // 3. 집계 (OFF 매니저 필터링)
+        records.forEach(record => {
+            const mgr = record.managerName || '미지정';
+            const uniqueKey = `${record.storeName}_${mgr}`;
+            const info = staffMap[uniqueKey];
 
-        // (A) 활성 매니저를 기준으로 맵 생성 (실적이 0이어도 표시하기 위함)
-        activeManagers.forEach(mgr => {
-            const key = `${mgr.storeName}_${mgr.managerName}`;
-            statsMap[key] = {
-                storeName: mgr.storeName,
-                managerName: mgr.managerName,
-                role: mgr.role || '매니저',
-                targetCount: mgr.targetCount || 0,
-                count: 0, // 실적 초기화
-                rate: 0,
-                rank: 0
-            };
+            // [핵심] 매니저 정보가 없거나(삭제됨), OFF 상태면 집계하지 않음 (대시보드 노출 X)
+            if (!info || info.isActive === false) {
+                return; 
+            }
+
+            if (!aggregates[uniqueKey]) {
+                aggregates[uniqueKey] = { 
+                    storeName: record.storeName, 
+                    managerName: mgr,
+                    role: record.role || (info ? info.role : '-'),
+                    targetCount: info ? info.targetCount : 0, 
+                    targetMonthlySales: info ? (info.targetMonthlySales || 0) : 0,
+                    count: 0, 
+                    rank: 0,
+                    rate: 0
+                };
+            }
+            aggregates[uniqueKey].count += record.count;
         });
 
-        // (B) 실적 데이터 붓기 (단, 활성 매니저 맵에 있는 사람만!)
-        records.forEach(record => {
-            // 데이터에 저장된 이름 (구버전 호환)
-            const staffName = record.staffName || record.managerName; 
-            if (!staffName) return;
-
-            const key = `${record.storeName}_${staffName}`;
-
-            // ★ 핵심 필터링: statsMap(활성 명단)에 있는 사람일 때만 카운트 더함
-            // 명단에 없으면(OFF 상태면) 이 데이터는 무시됨 -> 결과 페이지에 안 나옴
-            if (statsMap[key]) {
-                statsMap[key].count += record.count;
+        // 4. 활성 매니저 중 기록 없는 사람 0건으로 추가
+        activeSet.forEach(key => {
+            if (!aggregates[key]) {
+                const info = staffMap[key];
+                aggregates[key] = {
+                    storeName: info.storeName,
+                    managerName: info.managerName,
+                    role: info.role || '-',
+                    targetCount: info.targetCount || 0,
+                    targetMonthlySales: info.targetMonthlySales || 0,
+                    count: 0,
+                    rank: 0,
+                    rate: 0
+                };
             }
         });
 
-        // 5. 배열 변환 및 달성률 계산
-        let dashboardData = Object.values(statsMap);
+        const dashboardData = Object.values(aggregates);
 
+        // 5. 달성률 계산
         dashboardData.forEach(item => {
             if (item.targetCount > 0) {
-                item.rate = Math.round((item.count / item.targetCount) * 100);
+                item.rate = parseFloat(((item.count / item.targetCount) * 100).toFixed(1));
             } else {
                 item.rate = 0;
             }
         });
 
-        // 6. 랭킹 정렬 (실적 높은 순 -> 달성률 높은 순)
+        // 6. 랭킹 정렬
         dashboardData.sort((a, b) => {
-            if (b.count !== a.count) return b.count - a.count;
-            return b.rate - a.rate;
+            if (b.rate !== a.rate) return b.rate - a.rate;
+            return b.count - a.count;
         });
 
-        // 7. 순위 매기기
-        dashboardData.forEach((item, index) => {
-            item.rank = index + 1;
-        });
-
-        // 8. 총합 계산 (화면에 표시된 사람들의 합계만)
+        dashboardData.forEach((item, index) => { item.rank = index + 1; });
+        
         const totalCount = dashboardData.reduce((acc, cur) => acc + cur.count, 0);
 
-        res.json({ 
-            success: true, 
-            startDate: targetStartDate, 
-            endDate: targetEndDate, 
-            totalCount: totalCount,
-            data: dashboardData 
-        });
+        res.json({ success: true, startDate: targetStartDate, endDate: targetEndDate, totalCount, data: dashboardData });
 
     } catch (error) {
         console.error('대시보드 조회 오류:', error);
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
     }
 });
+
 // 4. [GET] 매장 리스트 조회
 app.get('/api/jwasu/stores', (req, res) => {
     res.json({ success: true, stores: OFFLINE_STORES });
@@ -1335,7 +1349,6 @@ app.post('/api/managers', async (req, res) => {
 
 // ==========================================
 // [섹션 E] 관리자(Admin) 매니저 관리 API (등록/수정/삭제)
-// ★ 목표좌수, 월목표매출, 주목표매출 저장 및 수정 로직 반영 ★
 // ==========================================
 
 // 1. [GET] 매니저 전체 목록 조회
@@ -1353,74 +1366,77 @@ app.get('/api/jwasu/admin/managers', async (req, res) => {
 });
 
 // 2. [POST] 신규 매니저 등록 (목표 좌수/월매출/주매출 포함)
-// 1. [POST] 매니저 등록 API (수정됨)
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { 
             storeName, managerName, role, consignment, 
-            targetCount, targetMonthlySales, targetWeeklySales, // [NEW] 추가된 필드들
+            targetCount, targetMonthlySales, targetWeeklySales, 
             isActive 
         } = req.body;
 
         if (!storeName || !managerName) {
-            return res.status(400).json({ success: false, message: '필수 정보 누락' });
+            return res.status(400).json({ success: false, message: '매장명과 이름은 필수입니다.' });
         }
 
-        const collection = db.collection('jwasu_managers');
+        const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
+        if (exists) {
+            return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
+        }
 
-        await collection.insertOne({
+        await db.collection(staffCollectionName).insertOne({
             storeName,
             managerName,
             role: role || '매니저',
             consignment: consignment || 'N',
             targetCount: parseInt(targetCount) || 0,
-            targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW] 월매출 목표
-            targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW] 주매출 목표
-            isActive: isActive !== undefined ? isActive : true,    // 기본값 ON
+            targetMonthlySales: parseInt(targetMonthlySales) || 0, 
+            targetWeeklySales: parseInt(targetWeeklySales) || 0, 
+            isActive: isActive !== undefined ? isActive : true,
             createdAt: new Date()
         });
 
-        res.json({ success: true, message: '등록 성공' });
+        res.json({ success: true, message: '등록되었습니다.' });
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: '등록 실패' });
+        console.error('등록 오류:', error);
+        res.status(500).json({ success: false, message: '등록 중 오류 발생' });
     }
 });
 
-// 2. [PUT] 매니저 정보 전체 수정 API (수정됨)
+// 3. [PUT] 매니저 정보 수정
 app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { 
             storeName, managerName, role, consignment, 
-            targetCount, targetMonthlySales, targetWeeklySales // [NEW]
+            targetCount, targetMonthlySales, targetWeeklySales 
         } = req.body;
 
-        const collection = db.collection('jwasu_managers');
-        // const { ObjectId } = require('mongodb'); // 필요시 상단 선언 확인
-
-        await collection.updateOne(
+        const result = await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
             { 
-                $set: {
+                $set: { 
                     storeName,
                     managerName,
                     role,
                     consignment,
                     targetCount: parseInt(targetCount) || 0,
-                    targetMonthlySales: parseInt(targetMonthlySales) || 0, // [NEW]
-                    targetWeeklySales: parseInt(targetWeeklySales) || 0,   // [NEW]
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0, 
+                    targetWeeklySales: parseInt(targetWeeklySales) || 0, 
                     updatedAt: new Date()
-                }
+                } 
             }
         );
 
-        res.json({ success: true, message: '수정 완료' });
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ success: false, message: '대상을 찾을 수 없습니다.' });
+        }
+
+        res.json({ success: true, message: '수정되었습니다.' });
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: '수정 실패' });
+        console.error('수정 오류:', error);
+        res.status(500).json({ success: false, message: '수정 중 오류 발생' });
     }
 });
 
@@ -1428,18 +1444,15 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
-        const { isActive } = req.body; // true or false
+        const { isActive } = req.body; 
 
-        const collection = db.collection('jwasu_managers');
-
-        await collection.updateOne(
+        await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
             { $set: { isActive: isActive } }
         );
+        res.json({ success: true });
 
-        res.json({ success: true, message: '상태 변경 완료' });
     } catch (error) {
-        console.error(error);
         res.status(500).json({ success: false, message: '상태 변경 실패' });
     }
 });
@@ -1515,14 +1528,7 @@ app.get('/api/sales/live-count', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false }); }
 });
 
-
-
-
-// ==========================================
-// [누락된 섹션] 통계 조회 API (반드시 추가해주세요!)
-// ==========================================
-
-// 6. [GET] 월별 좌수왕(명예의 전당) 히스토리 조회
+// 7. [GET] 월별 좌수왕(명예의 전당) 히스토리 조회
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
         const { month } = req.query;
@@ -1556,8 +1562,7 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
     }
 });
 
-// 7. [GET] 내 통계(일별 로그) 조회
-// * 이 부분이 없어서 카운터 페이지에서 404 에러가 발생했습니다.
+// 8. [GET] 내 통계(일별 로그) 조회
 app.get('/api/jwasu/my-stats', async (req, res) => {
     try {
         const { storeName, managerName } = req.query;
@@ -1582,9 +1587,7 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
     }
 });
 
-// ==========================================
-// [섹션 F] 엑셀 데이터 일괄 업로드 API (이름 기준 매핑 수정판)
-// ==========================================
+// 9. [POST] 엑셀 데이터 일괄 업로드 (이름 기준 매핑)
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
@@ -1593,15 +1596,15 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
             return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
         }
 
-        const jwasuCollection = db.collection('offline_jwasu');
-        const staffCollection = db.collection('jwasu_managers');
+        const jwasuCollection = db.collection(jwasuCollectionName);
+        const staffCollection = db.collection(staffCollectionName);
 
         // 1. 매니저 정보 미리 로딩 (이름 기준 Map 생성)
         const allStaffs = await staffCollection.find().toArray();
         const staffMap = {};
         
         allStaffs.forEach(s => {
-            // 이름의 공백을 제거해서 키로 사용 (예: " 김 철수 " -> "김철수")
+            // 이름의 공백을 제거해서 키로 사용
             if (s.managerName) {
                 const cleanName = s.managerName.replace(/\s+/g, '').trim();
                 staffMap[cleanName] = s;
@@ -1612,26 +1615,20 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
         const operations = [];
         
         data.forEach(item => {
-            // 엑셀에서 읽은 값
             let excelStore = item.storeName || '';
             let excelName = item.managerName || '미지정';
             const dateStr = item.date;
             const count = parseInt(item.count) || 0;
 
-            // 이름 정리 (공백 제거)
             const cleanExcelName = String(excelName).replace(/\s+/g, '').trim();
-
-            // ★ [핵심 변경] 이름으로 매니저 정보 찾기
             const staffInfo = staffMap[cleanExcelName];
 
-            // DB에 등록된 매니저라면, DB의 '정확한 매장명'과 '정보'를 사용
-            // (엑셀에 '고양 스타필드'라고 써있어도 DB의 '스타필드고양'으로 자동 변환됨)
+            // DB에 등록된 매니저라면, DB의 정보를 우선 사용 (자동 보정)
             const finalStoreName = staffInfo ? staffInfo.storeName : excelStore;
             const finalManagerName = staffInfo ? staffInfo.managerName : excelName;
 
             operations.push({
                 updateOne: {
-                    // 검색 조건: 날짜 + (보정된)매장명 + (보정된)이름
                     filter: { 
                         date: dateStr, 
                         storeName: finalStoreName, 
@@ -1641,7 +1638,6 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
                         $set: {
                             count: count,
                             lastUpdated: new Date(),
-                            // 스냅샷 정보 저장 (이름만 맞으면 정보 다 가져옴)
                             role: staffInfo ? staffInfo.role : '매니저',
                             consignment: staffInfo ? staffInfo.consignment : 'N',
                             targetCount: staffInfo ? staffInfo.targetCount : 0,
@@ -1655,14 +1651,11 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
             });
         });
 
-        // 3. DB 실행
         if (operations.length > 0) {
             const result = await jwasuCollection.bulkWrite(operations);
-            console.log(`📂 이름 기준 업로드 완료: ${result.upsertedCount}건 생성, ${result.modifiedCount}건 수정`);
-            
             res.json({ 
                 success: true, 
-                message: `총 ${operations.length}건 처리 완료 (이름 기준 매핑)` 
+                message: `총 ${operations.length}건 처리 완료` 
             });
         } else {
             res.json({ success: true, message: '처리할 유효 데이터가 없습니다.' });
@@ -1673,11 +1666,6 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
         res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' });
     }
 });
-
-
-
-
-
 
 
 
