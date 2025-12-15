@@ -970,6 +970,7 @@ app.get('/api/clean-bots', async (req, res) => {
 
 
 
+
 /**
  * [좌수왕 서버 통합 라우트]
  * * 필수 요구사항:
@@ -986,7 +987,7 @@ const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매�
 const monthlyTargetCollection = 'jwasu_monthly_targets'; // [NEW] 월별 목표 관리 컬렉션
 const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니저 컬렉션
 
-// 관리 대상 매장 리스트
+// 관리 대상 매장 리스트 (표준 명칭)
 const OFFLINE_STORES = [
     "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
     "스타필드고양", "스타필드하남", "현대미아", "현대울산",
@@ -1034,7 +1035,7 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
         const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
-        const currentMonthStr = now.format('YYYY-MM'); // "2025-02"
+        const currentMonthStr = now.format('YYYY-MM'); 
 
         const collection = db.collection(jwasuCollectionName);
         const staffCollection = db.collection(staffCollectionName);
@@ -1043,10 +1044,9 @@ app.post('/api/jwasu/increment', async (req, res) => {
         // 기본 정보 조회
         const staffInfo = await staffCollection.findOne({ storeName: storeName, managerName: mgrName });
         
-        // [NEW] 이번 달 설정된 목표 조회 (우선순위 1)
+        // 이번 달 설정된 목표 조회
         const monthlyTarget = await targetCollection.findOne({ month: currentMonthStr, storeName: storeName, managerName: mgrName });
 
-        // 목표 결정: 월별 목표(설정값) > 기본 정보(등록값)
         const finalTargetCount = (monthlyTarget && monthlyTarget.targetCount > 0) ? monthlyTarget.targetCount : (staffInfo ? staffInfo.targetCount : 0);
         const finalMonthlySales = (monthlyTarget && monthlyTarget.targetMonthlySales > 0) ? monthlyTarget.targetMonthlySales : (staffInfo ? staffInfo.targetMonthlySales : 0);
         const finalWeeklySales = (monthlyTarget && monthlyTarget.targetWeeklySales) ? monthlyTarget.targetWeeklySales : (staffInfo ? staffInfo.targetWeeklySales : 0);
@@ -1125,7 +1125,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회 (월별 설정 > 스냅샷 > 기본값)
+// 3. [GET] 대시보드 데이터 조회
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
@@ -1137,22 +1137,26 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         const staffCollection = db.collection(staffCollectionName);
         const targetCollection = db.collection(monthlyTargetCollection);
 
+        // 공백 제거 정규화 함수
+        const normalize = (str) => String(str || '').replace(/\s+/g, '').trim();
+
         // 1. 매니저 정보 로딩
         const allStaffs = await staffCollection.find().toArray();
         const staffMap = {};
         const activeSet = new Set();
 
         allStaffs.forEach(s => {
-            const key = `${s.storeName}_${s.managerName}`;
+            const key = `${normalize(s.storeName)}_${normalize(s.managerName)}`;
             staffMap[key] = s;
             if (s.isActive !== false) activeSet.add(key);
         });
 
-        // [NEW] 2. 해당 월의 설정된 목표 가져오기
+        // 2. 해당 월의 설정된 목표 가져오기
         const monthlyTargets = await targetCollection.find({ month: targetMonthStr }).toArray();
         const monthlyTargetMap = {};
         monthlyTargets.forEach(t => {
-            monthlyTargetMap[`${t.storeName}_${t.managerName}`] = t;
+            const key = `${normalize(t.storeName)}_${normalize(t.managerName)}`;
+            monthlyTargetMap[key] = t;
         });
 
         // 3. 기록 조회
@@ -1165,24 +1169,33 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         // 4. 집계
         records.forEach(record => {
             const mgr = record.managerName || '미지정';
-            const uniqueKey = `${record.storeName}_${mgr}`;
+            const uniqueKey = `${normalize(record.storeName)}_${normalize(mgr)}`;
+            
             const info = staffMap[uniqueKey];
-            const mTarget = monthlyTargetMap[uniqueKey]; // 월별 설정
+            const mTarget = monthlyTargetMap[uniqueKey]; 
 
-            if (!info || info.isActive === false) return; // OFF 매니저 제외
+            // 삭제된 매니저 or OFF 매니저 제외
+            if (!info || info.isActive === false) return; 
 
-            // [핵심] 목표 우선순위: 1.월별설정 > 2.기록스냅샷 > 3.기본설정
+            // 목표 우선순위 결정
             let finalTarget = 0;
             if (mTarget && mTarget.targetCount > 0) finalTarget = mTarget.targetCount;
             else if (record.targetCount > 0) finalTarget = record.targetCount;
             else if (info) finalTarget = info.targetCount;
+
+            // 매출 목표 결정
+            let finalSales = 0;
+            if (mTarget && mTarget.targetMonthlySales > 0) finalSales = mTarget.targetMonthlySales;
+            else if (record.targetMonthlySales > 0) finalSales = record.targetMonthlySales;
+            else if (info) finalSales = info.targetMonthlySales;
 
             if (!aggregates[uniqueKey]) {
                 aggregates[uniqueKey] = { 
                     storeName: record.storeName, 
                     managerName: mgr,
                     role: record.role || (info ? info.role : '-'),
-                    targetCount: finalTarget, 
+                    targetCount: finalTarget,
+                    targetMonthlySales: finalSales,
                     count: 0, 
                     rank: 0,
                     rate: 0
@@ -1197,14 +1210,15 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 const info = staffMap[key];
                 const mTarget = monthlyTargetMap[key];
                 
-                // 목표값 결정
                 const finalTarget = (mTarget && mTarget.targetCount > 0) ? mTarget.targetCount : (info.targetCount || 0);
+                const finalSales = (mTarget && mTarget.targetMonthlySales > 0) ? mTarget.targetMonthlySales : (info.targetMonthlySales || 0);
 
                 aggregates[key] = {
                     storeName: info.storeName,
                     managerName: info.managerName,
                     role: info.role || '-',
                     targetCount: finalTarget,
+                    targetMonthlySales: finalSales,
                     count: 0,
                     rank: 0,
                     rate: 0
@@ -1214,7 +1228,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
 
         const dashboardData = Object.values(aggregates);
 
-        // 6. 달성률 계산 & 정렬
+        // 6. 달성률 계산
         dashboardData.forEach(item => {
             if (item.targetCount > 0) {
                 item.rate = parseFloat(((item.count / item.targetCount) * 100).toFixed(1));
@@ -1223,6 +1237,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             }
         });
 
+        // 7. 랭킹 정렬
         dashboardData.sort((a, b) => {
             if (b.rate !== a.rate) return b.rate - a.rate;
             return b.count - a.count;
@@ -1242,7 +1257,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
 // ... (기존 조회 API 유지) ...
 app.get('/api/jwasu/stores', (req, res) => { res.json({ success: true, stores: OFFLINE_STORES }); });
 
-// [섹션 - 통합 조회] 테이블 API
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
@@ -1281,36 +1295,55 @@ app.get('/api/jwasu/table', async (req, res) => {
 });
 
 // ... (Cafe24 API 유지) ...
-
-// ==========================================
-// [섹션 G] 월별 목표 관리 API (신규 추가 - 팝업용)
-// ==========================================
-
-// 1. [GET] 특정 매니저의 특정 월 목표 조회
-app.get('/api/jwasu/admin/monthly-target', async (req, res) => {
+app.get('/api/managers', async (req, res) => {
     try {
-        const { month, storeName, managerName } = req.query;
-        if (!month || !storeName || !managerName) {
-            return res.status(400).json({ success: false, message: '정보 부족' });
-        }
-
-        const target = await db.collection(monthlyTargetCollection).findOne({ month, storeName, managerName });
-        res.json({ success: true, data: target || {} });
-
+        const { mall_id } = req.query;
+        const collection = db.collection(cafe24ManagerCollection);
+        const query = mall_id ? { mall_id: mall_id } : {};
+        const managers = await collection.find(query).toArray();
+        res.json({ success: true, managers: managers });
     } catch (error) {
-        res.status(500).json({ success: false, message: '조회 실패' });
+        res.status(500).json({ success: false, message: '매니저 정보 조회 실패' });
     }
 });
 
-// 2. [POST] 월별 목표 저장 (Upsert)
+app.post('/api/managers', async (req, res) => {
+    try {
+        const { mall_id, shop_url, client_id } = req.body; 
+        if (!mall_id) return res.status(400).json({ success: false, message: 'mall_id 필수' });
+
+        const collection = db.collection(cafe24ManagerCollection);
+        const result = await collection.findOneAndUpdate(
+            { mall_id: mall_id },
+            { 
+                $set: { mall_id, shop_url: shop_url || '', client_id: client_id || '', lastUpdated: new Date() },
+                $setOnInsert: { createdAt: new Date(), status: 'active' }
+            },
+            { upsert: true, returnDocument: 'after' }
+        );
+        res.json({ success: true, message: '저장 완료', data: result.value || result });
+    } catch (error) {
+        res.status(500).json({ success: false, message: '매니저 저장 실패' });
+    }
+});
+
+// ==========================================
+// [섹션 G] 월별 목표 관리 API (팝업용)
+// ==========================================
+app.get('/api/jwasu/admin/monthly-target', async (req, res) => {
+    try {
+        const { month, storeName, managerName } = req.query;
+        if (!month || !storeName || !managerName) return res.status(400).json({ success: false });
+
+        const target = await db.collection(monthlyTargetCollection).findOne({ month, storeName, managerName });
+        res.json({ success: true, data: target || {} });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
 app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
     try {
         const { month, storeName, managerName, targetCount, targetMonthlySales, targetWeeklySales } = req.body;
-
-        let weeklySalesData = targetWeeklySales;
-        if (!weeklySalesData || typeof weeklySalesData !== 'object') {
-            weeklySalesData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
-        }
+        let weeklySalesData = targetWeeklySales || { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
 
         await db.collection(monthlyTargetCollection).updateOne(
             { month, storeName, managerName },
@@ -1324,30 +1357,26 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
             },
             { upsert: true }
         );
-
         res.json({ success: true });
-    } catch (error) {
-        console.error("월별 목표 저장 오류:", error);
-        res.status(500).json({ success: false, message: '저장 실패' });
-    }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 // ==========================================
-// [섹션 E] 관리자(Admin) 매니저 관리 API
+// [섹션 E] 관리자 API
 // ==========================================
 app.get('/api/jwasu/admin/managers', async (req, res) => {
     try {
         const managers = await db.collection(staffCollectionName).find().sort({ storeName: 1, managerName: 1 }).toArray();
         res.json({ success: true, managers });
-    } catch (error) { res.status(500).json({ success: false, message: '목록 조회 실패' }); }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { storeName, managerName, role, consignment, targetCount, targetMonthlySales, targetWeeklySales, isActive } = req.body;
-        if (!storeName || !managerName) return res.status(400).json({ success: false, message: '필수 정보 누락' });
+        if (!storeName || !managerName) return res.status(400).json({ success: false });
         const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
-        if (exists) return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다.' });
+        if (exists) return res.status(400).json({ success: false, message: '이미 등록됨' });
 
         await db.collection(staffCollectionName).insertOne({
             storeName, managerName, role: role || '매니저', consignment: consignment || 'N',
@@ -1357,8 +1386,8 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
             isActive: isActive !== undefined ? isActive : true,
             createdAt: new Date()
         });
-        res.json({ success: true, message: '등록되었습니다.' });
-    } catch (error) { res.status(500).json({ success: false, message: '등록 중 오류 발생' }); }
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
@@ -1369,9 +1398,8 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
             { _id: new ObjectId(id) },
             { $set: { storeName, managerName, role, consignment, targetCount: parseInt(targetCount)||0, targetMonthlySales: parseInt(targetMonthlySales)||0, targetWeeklySales: parseInt(targetWeeklySales)||0, updatedAt: new Date() } }
         );
-        if (result.matchedCount === 0) return res.status(404).json({ success: false, message: '대상을 찾을 수 없습니다.' });
-        res.json({ success: true, message: '수정되었습니다.' });
-    } catch (error) { res.status(500).json({ success: false, message: '수정 중 오류 발생' }); }
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
@@ -1380,22 +1408,21 @@ app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
         const { isActive } = req.body; 
         await db.collection(staffCollectionName).updateOne({ _id: new ObjectId(id) }, { $set: { isActive: isActive } });
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ success: false, message: '상태 변경 실패' }); }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
         await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
-        res.json({ success: true, message: '삭제되었습니다.' });
-    } catch (error) { res.status(500).json({ success: false, message: '삭제 실패' }); }
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [섹션 - 기타 통계]
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
         const { month } = req.query;
-        if (!month) return res.status(400).json({ success: false, message: '월 정보 필요' });
+        if (!month) return res.status(400).json({ success: false });
         const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
         const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
         const collection = db.collection(jwasuCollectionName);
@@ -1405,13 +1432,13 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
         historyData.sort((a, b) => b.count - a.count);
         historyData.forEach((item, index) => item.rank = index + 1);
         res.json(historyData);
-    } catch (error) { res.status(500).json({ success: false, message: '월별 조회 실패' }); }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
 app.get('/api/jwasu/my-stats', async (req, res) => {
     try {
         const { storeName, managerName } = req.query;
-        if (!storeName) return res.status(400).json({ success: false, message: '매장명 필요' });
+        if (!storeName) return res.status(400).json({ success: false });
         const now = moment().tz('Asia/Seoul');
         const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
         const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
@@ -1420,36 +1447,87 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
         if (managerName) query.managerName = managerName;
         const dailyRecords = await collection.find(query).sort({ date: -1 }).toArray();
         res.json({ success: true, data: dailyRecords });
-    } catch (error) { res.status(500).json({ success: false, message: '통계 조회 실패' }); }
+    } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [섹션 F] 엑셀 업로드 (이름 기준, 목표값 우선 처리)
+// ==========================================
+// [섹션 F] 엑셀 데이터 일괄 업로드 API (최종: 매장명 자동 보정 포함)
+// ==========================================
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
-        if (!Array.isArray(data) || data.length === 0) return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
-        
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
+        }
+
         const jwasuCollection = db.collection(jwasuCollectionName);
         const staffCollection = db.collection(staffCollectionName);
+
+        // 1. 매니저 정보 미리 로딩
         const allStaffs = await staffCollection.find().toArray();
         const staffMap = {};
-        allStaffs.forEach(s => { if (s.managerName) { const cleanName = String(s.managerName).replace(/\s+/g, '').trim(); staffMap[cleanName] = s; } });
+        
+        allStaffs.forEach(s => {
+            // 이름만으로 매칭 (동명이인 없다는 가정)
+            if (s.managerName) {
+                const cleanName = String(s.managerName).replace(/\s+/g, '').trim();
+                staffMap[cleanName] = s;
+            }
+        });
+
+        // [NEW] 매장명 별칭 맵 (자주 틀리는 패턴 등록)
+        const storeAliasMap = {
+            "대구롯데": "롯데대구", "롯데대구점": "롯데대구",
+            "동탄롯데": "롯데동탄", "롯데동탄점": "롯데동탄",
+            "안산롯데": "롯데안산", "롯데안산점": "롯데안산",
+            "광복롯데": "롯데광복", "롯데광복점": "롯데광복",
+            "평촌롯데": "롯데평촌", "롯데평촌점": "롯데평촌",
+            "미아현대": "현대미아", "현대미아점": "현대미아",
+            "울산현대": "현대울산", "현대울산점": "현대울산",
+            "중동현대": "현대중동", "현대중동점": "현대중동",
+            "고양스타필드": "스타필드고양", "하남스타필드": "스타필드하남",
+            "센텀": "신세계센텀시티몰", "센텀시티": "신세계센텀시티몰", "신세계센텀": "신세계센텀시티몰", "센텀시티몰신세계": "신세계센텀시티몰", "센텀시티몰 신세계": "신세계센텀시티몰",
+            "광주신세계": "광주신세계", "신세계광주": "광주신세계",
+            "대구신세계": "대구신세계", "신세계대구": "대구신세계"
+        };
 
         const dailyOperations = [];
+        const managerUpdates = new Map();
+        
         data.forEach(item => {
-            let excelStore = item.storeName || '';
-            let excelName = item.managerName || '미지정';
+            let excelStore = String(item.storeName || '').trim();
+            let excelName = String(item.managerName || '미지정').trim();
             const dateStr = item.date;
             const count = parseInt(item.count) || 0;
-            const target = parseInt(item.target) || 0; 
-            const cleanExcelName = String(excelName).replace(/\s+/g, '').trim();
-            const staffInfo = staffMap[cleanExcelName];
-            const finalStoreName = staffInfo ? staffInfo.storeName : excelStore;
+            const target = parseInt(item.target) || 0;
+
+            const cleanExcelName = excelName.replace(/\s+/g, '');
+            const cleanExcelStore = excelStore.replace(/\s+/g, '');
+
+            // 1. 이름으로 매니저 찾기
+            let staffInfo = staffMap[cleanExcelName];
+
+            // 2. 매장명 보정 (Alias Map 활용)
+            let finalStoreName = excelStore;
+            // (1) DB에 매니저가 있으면 그 매니저의 매장명 사용 (가장 정확)
+            if (staffInfo) {
+                finalStoreName = staffInfo.storeName;
+            } 
+            // (2) 매니저 못 찾으면 별칭 맵에서 매장명 변환 시도
+            else if (storeAliasMap[cleanExcelStore]) {
+                finalStoreName = storeAliasMap[cleanExcelStore];
+            }
+
             const finalManagerName = staffInfo ? staffInfo.managerName : excelName;
 
             dailyOperations.push({
                 updateOne: {
-                    filter: { date: dateStr, storeName: finalStoreName, managerName: finalManagerName },
+                    filter: { 
+                        date: dateStr, 
+                        storeName: finalStoreName, 
+                        managerName: finalManagerName 
+                    },
                     update: {
                         $set: {
                             count: count,
@@ -1465,16 +1543,49 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
                     upsert: true
                 }
             });
+
+            if (target > 0 && staffInfo) {
+                managerUpdates.set(staffInfo._id.toString(), target);
+            }
         });
 
         if (dailyOperations.length > 0) {
             await jwasuCollection.bulkWrite(dailyOperations);
-            res.json({ success: true, message: `총 ${dailyOperations.length}건 처리 완료` });
-        } else {
-            res.json({ success: true, message: '처리할 유효 데이터가 없습니다.' });
         }
-    } catch (error) { res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' }); }
+
+        if (managerUpdates.size > 0) {
+            const mgrOps = [];
+            managerUpdates.forEach((newTarget, mgrId) => {
+                mgrOps.push({
+                    updateOne: {
+                        filter: { _id: new ObjectId(mgrId) },
+                        update: { $set: { targetCount: newTarget } }
+                    }
+                });
+            });
+            await staffCollection.bulkWrite(mgrOps);
+        }
+
+        res.json({ success: true, message: `총 ${dailyOperations.length}건 처리 완료` });
+
+    } catch (error) {
+        console.error('엑셀 업로드 오류:', error);
+        res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' });
+    }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
