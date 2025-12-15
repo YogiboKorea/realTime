@@ -1582,13 +1582,12 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
     }
 });
 
-
 // ==========================================
-// [섹션 F] 엑셀 데이터 일괄 업로드 API (추가)
+// [섹션 F] 엑셀 데이터 일괄 업로드 API (이름 기준 매핑 수정판)
 // ==========================================
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
-        const { data } = req.body; // 프론트에서 변환된 배열 [{date, storeName, managerName, count}, ...]
+        const { data } = req.body; 
 
         if (!Array.isArray(data) || data.length === 0) {
             return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
@@ -1597,32 +1596,52 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
         const jwasuCollection = db.collection('offline_jwasu');
         const staffCollection = db.collection('jwasu_managers');
 
-        // 1. 매니저 정보 미리 로딩 (스냅샷 저장을 위해)
+        // 1. 매니저 정보 미리 로딩 (이름 기준 Map 생성)
         const allStaffs = await staffCollection.find().toArray();
         const staffMap = {};
+        
         allStaffs.forEach(s => {
-            // 키 생성: "매장명_이름" (공백 제거 등 전처리 추천하나 여기선 그대로 사용)
-            staffMap[`${s.storeName}_${s.managerName}`] = s;
+            // 이름의 공백을 제거해서 키로 사용 (예: " 김 철수 " -> "김철수")
+            if (s.managerName) {
+                const cleanName = s.managerName.replace(/\s+/g, '').trim();
+                staffMap[cleanName] = s;
+            }
         });
 
         // 2. Bulk Write 작업 생성
-        const operations = data.map(item => {
-            const dateStr = item.date;       // "YYYY-MM-DD"
-            const storeName = item.storeName; 
-            const managerName = item.managerName;
+        const operations = [];
+        
+        data.forEach(item => {
+            // 엑셀에서 읽은 값
+            let excelStore = item.storeName || '';
+            let excelName = item.managerName || '미지정';
+            const dateStr = item.date;
             const count = parseInt(item.count) || 0;
 
-            // 매니저 정보 매칭 (현재 DB에 있는 정보 가져오기)
-            const staffInfo = staffMap[`${storeName}_${managerName}`];
+            // 이름 정리 (공백 제거)
+            const cleanExcelName = String(excelName).replace(/\s+/g, '').trim();
 
-            return {
+            // ★ [핵심 변경] 이름으로 매니저 정보 찾기
+            const staffInfo = staffMap[cleanExcelName];
+
+            // DB에 등록된 매니저라면, DB의 '정확한 매장명'과 '정보'를 사용
+            // (엑셀에 '고양 스타필드'라고 써있어도 DB의 '스타필드고양'으로 자동 변환됨)
+            const finalStoreName = staffInfo ? staffInfo.storeName : excelStore;
+            const finalManagerName = staffInfo ? staffInfo.managerName : excelName;
+
+            operations.push({
                 updateOne: {
-                    filter: { date: dateStr, storeName: storeName, managerName: managerName },
+                    // 검색 조건: 날짜 + (보정된)매장명 + (보정된)이름
+                    filter: { 
+                        date: dateStr, 
+                        storeName: finalStoreName, 
+                        managerName: finalManagerName 
+                    },
                     update: {
                         $set: {
                             count: count,
                             lastUpdated: new Date(),
-                            // 스냅샷 정보 저장 (이 시점의 직급/목표 등)
+                            // 스냅샷 정보 저장 (이름만 맞으면 정보 다 가져옴)
                             role: staffInfo ? staffInfo.role : '매니저',
                             consignment: staffInfo ? staffInfo.consignment : 'N',
                             targetCount: staffInfo ? staffInfo.targetCount : 0,
@@ -1631,28 +1650,29 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
                         },
                         $setOnInsert: { createdAt: new Date() }
                     },
-                    upsert: true // 없으면 Insert, 있으면 Update
+                    upsert: true
                 }
-            };
+            });
         });
 
         // 3. DB 실행
         if (operations.length > 0) {
             const result = await jwasuCollection.bulkWrite(operations);
+            console.log(`📂 이름 기준 업로드 완료: ${result.upsertedCount}건 생성, ${result.modifiedCount}건 수정`);
+            
             res.json({ 
                 success: true, 
-                message: `총 ${operations.length}건 처리 완료 (수정: ${result.modifiedCount}, 신규: ${result.upsertedCount})` 
+                message: `총 ${operations.length}건 처리 완료 (이름 기준 매핑)` 
             });
         } else {
-            res.json({ success: true, message: '처리할 데이터가 없습니다.' });
+            res.json({ success: true, message: '처리할 유효 데이터가 없습니다.' });
         }
 
     } catch (error) {
         console.error('엑셀 업로드 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류 발생' });
+        res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' });
     }
 });
-
 
 
 
