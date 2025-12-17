@@ -970,7 +970,6 @@ app.get('/api/clean-bots', async (req, res) => {
 
 
 
-
 /**
  * [좌수왕 서버 통합 라우트]
  * * 필수 요구사항:
@@ -993,7 +992,7 @@ const OFFLINE_STORES = [
     "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
     "스타필드고양", "스타필드하남", "현대미아", "현대울산",
     "롯데광복", "신세계광주", "신세계대구", "현대중동", "롯데평촌",
-    "아브뉴프랑광교", "현대무역센터", "더현대 서울 현대", "청주 현대 커넥트","현대충청","NC강남"
+    "아브뉴프랑광교", "현대무역센터", "더현대 서울 현대", "청주 현대 커넥트", "현대충청", "NC강남"
 ];
 
 // ==========================================
@@ -1029,9 +1028,10 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const { storeName, managerName } = req.body;
         const mgrName = managerName || '미지정';
 
-        if (!OFFLINE_STORES.includes(storeName)) {
-            return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
-        }
+        // ★ [수정] 매장명 검증 로직 완화 (미지정 매장도 카운트 가능하도록 주석 처리)
+        // if (!OFFLINE_STORES.includes(storeName)) {
+        //     return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
+        // }
 
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
@@ -1190,7 +1190,8 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 }
             }
 
-            if (!info || info.isActive === false) return; 
+            // 비활성 매니저도 기록이 있으면 보여줘야 함 (필터링 로직 수정 필요시 여기서)
+            // if (!info || info.isActive === false) return; 
 
             const mTarget = monthlyTargetMap[uniqueKey];
 
@@ -1409,6 +1410,56 @@ app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+// [섹션 - 기타 통계] - my-stats 추가
+app.get('/api/jwasu/my-stats', async (req, res) => {
+    try {
+        const { storeName, managerName } = req.query;
+        if (!storeName) return res.status(400).json({ success: false });
+
+        const now = moment().tz('Asia/Seoul');
+        const startOfThisMonth = now.clone().startOf('month').format('YYYY-MM-DD');
+        const endOfThisMonth = now.clone().endOf('month').format('YYYY-MM-DD');
+        
+        const collection = db.collection(jwasuCollectionName);
+        
+        const query = { storeName: storeName, date: { $gte: startOfThisMonth, $lte: endOfThisMonth } };
+        if (managerName) query.managerName = managerName;
+        
+        const dailyRecords = await collection.find(query).sort({ date: -1 }).toArray();
+        res.json({ success: true, data: dailyRecords });
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
+// [섹션 - 월별 히스토리] - monthly-history 추가
+app.get('/api/jwasu/monthly-history', async (req, res) => {
+    try {
+        const { month } = req.query;
+        if (!month) return res.status(400).json({ success: false });
+        
+        const startOfMonth = moment(month).startOf('month').format('YYYY-MM-DD');
+        const endOfMonth = moment(month).endOf('month').format('YYYY-MM-DD');
+        
+        const collection = db.collection(jwasuCollectionName);
+        const pipeline = [ 
+            { $match: { date: { $gte: startOfMonth, $lte: endOfMonth } } }, 
+            { $group: { _id: { store: "$storeName", manager: "$managerName" }, totalCount: { $sum: "$count" } } } 
+        ];
+        
+        const aggResults = await collection.aggregate(pipeline).toArray();
+        const historyData = aggResults.map(item => ({ 
+            storeName: item._id.store, 
+            managerName: item._id.manager || '미지정', 
+            count: item.totalCount, 
+            rank: 0 
+        }));
+        
+        historyData.sort((a, b) => b.count - a.count);
+        historyData.forEach((item, index) => item.rank = index + 1);
+        
+        res.json(historyData);
+    } catch (error) { res.status(500).json({ success: false }); }
+});
+
 // [섹션 F] 기존 좌수 엑셀 업로드 (이름 기준)
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
@@ -1485,7 +1536,7 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
 
 // ==========================================
 // [섹션 H] 매니저 매출 관리 (New Feature)
-// * 컬렉션: manager_sales
+// * 컬렉션: manager_salesNew
 // * 기능: 엑셀 업로드 및 조회
 // ==========================================
 
@@ -1513,8 +1564,7 @@ app.get('/api/manager-sales', async (req, res) => {
 app.post('/api/manager-sales/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
-        // data: [ { date: '2023-12-01', storeName: '...', managerName: '...', salesAmount: 100000 }, ... ]
-
+        
         if (!Array.isArray(data) || data.length === 0) {
             return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
         }
@@ -1536,10 +1586,14 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
                         update: {
                             $set: {
                                 salesAmount: salesAmount,
+                                revenue: salesAmount,
+                                type: 'sales',
                                 lastUpdated: new Date()
                             },
                             $setOnInsert: { 
-                                createdAt: new Date() 
+                                createdAt: new Date(),
+                                count: 0,
+                                role: ''
                             }
                         },
                         upsert: true // 데이터가 없으면 insert, 있으면 update
@@ -1559,10 +1613,6 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
         res.status(500).json({ success: false, message: '매출 업로드 중 오류 발생' });
     }
 });
-
-
-
-
 
 
 
