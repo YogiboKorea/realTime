@@ -986,7 +986,7 @@ const jwasuCollectionName = 'offline_jwasu';      // [좌수] 일별 카운트 �
 const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매니저 정보 (Admin 등록)
 const monthlyTargetCollection = 'jwasu_monthly_targets'; // [NEW] 월별 목표 관리 컬렉션
 const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니저 컬렉션
-const managerSalesCollection = 'manager_sales';   // [NEW] 매니저별 매출 기록 (엑셀 업로드용)
+const managerSalesCollection = 'manager_salesNew';   // [NEW] 매니저별 매출 기록 (엑셀 업로드용)
 
 // 관리 대상 매장 리스트
 const OFFLINE_STORES = [
