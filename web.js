@@ -1655,7 +1655,6 @@ app.get('/api/event-winners', async (req, res) => {
       res.status(500).json({ success: false, winners: [] });
     }
 });
-
 // 2. [이벤트 참여 API]
 app.post('/api/play-event', async (req, res) => {
     try {
@@ -1663,7 +1662,7 @@ app.post('/api/play-event', async (req, res) => {
   
       // ★ 크리스마스 이벤트 확률 데이터 부분
       const MAX_DAILY_WINNERS = 10; 
-      const WIN_PROBABILITY_PERCENT = 10; 
+      const WIN_PROBABILITY_PERCENT = 8; 
   
       // ★ 쿠폰 정보 (실제 발급될 쿠폰 번호와 이동 URL)
       const PRIZE_COUPON_NO = "6083836502100001083";
