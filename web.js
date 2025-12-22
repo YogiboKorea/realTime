@@ -968,7 +968,6 @@ app.get('/api/clean-bots', async (req, res) => {
     }
 });
 
-
 /**
  * [좌수왕 서버 통합 라우트]
  * * 필수 요구사항:
@@ -991,7 +990,7 @@ const OFFLINE_STORES = [
     "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
     "스타필드고양", "스타필드하남", "현대미아", "현대울산",
     "롯데광복", "신세계광주", "신세계대구", "현대중동", "롯데평촌",
-    "아브뉴프랑광교", "현대무역센터", "더현대 서울 현대", "청주 현대 커넥트","현대충청","NC강남"
+    "아브뉴프랑광교", "현대무역센터", "더현대 서울 현대", "청주 현대 커넥트", "현대충청", "NC강남"
 ];
 
 // ==========================================
@@ -1026,6 +1025,11 @@ app.post('/api/jwasu/increment', async (req, res) => {
     try {
         const { storeName, managerName } = req.body;
         const mgrName = managerName || '미지정';
+
+        // ★ [수정] 매장명 검증 로직 완화 (미지정 매장도 카운트 가능하도록 주석 처리)
+        // if (!OFFLINE_STORES.includes(storeName)) {
+        //     return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
+        // }
 
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
@@ -1121,7 +1125,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
     }
 });
 
-// 3. [GET] 대시보드 데이터 조회 (★수정됨: 주간 목표 데이터 포함)
+// 3. [GET] 대시보드 데이터 조회
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
         const queryDate = req.query.date;
@@ -1184,12 +1188,13 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 }
             }
 
+            // 비활성 매니저도 기록이 있으면 보여줘야 함
+            // if (!info || info.isActive === false) return; 
+
             const mTarget = monthlyTargetMap[uniqueKey];
 
             let finalTarget = 0;
             let finalSales = 0;
-            // [수정] 주간 목표 변수 추가
-            let finalWeeklySales = { w1:0, w2:0, w3:0, w4:0, w5:0 };
 
             if (mTarget && mTarget.targetCount > 0) finalTarget = mTarget.targetCount;
             else if (record.targetCount > 0) finalTarget = record.targetCount;
@@ -1199,10 +1204,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             else if (record.targetMonthlySales > 0) finalSales = record.targetMonthlySales;
             else if (info) finalSales = info.targetMonthlySales;
 
-            // [수정] 주간 목표 결정 로직 (월별목표 > 매니저설정)
-            if (mTarget && mTarget.targetWeeklySales) finalWeeklySales = mTarget.targetWeeklySales;
-            else if (info && info.targetWeeklySales) finalWeeklySales = info.targetWeeklySales;
-
             if (!aggregates[uniqueKey]) {
                 aggregates[uniqueKey] = { 
                     storeName: info ? info.storeName : record.storeName,
@@ -1210,7 +1211,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: record.role || (info ? info.role : '-'),
                     targetCount: finalTarget, 
                     targetMonthlySales: finalSales,
-                    targetWeeklySales: finalWeeklySales, // [수정] 데이터 포함
                     count: 0, 
                     rank: 0,
                     rate: 0
@@ -1232,9 +1232,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 
                 const finalTarget = (mTarget && mTarget.targetCount > 0) ? mTarget.targetCount : (info.targetCount || 0);
                 const finalSales = (mTarget && mTarget.targetMonthlySales > 0) ? mTarget.targetMonthlySales : (info.targetMonthlySales || 0);
-                
-                // [수정] 주간 목표 결정 로직
-                const finalWeeklySales = (mTarget && mTarget.targetWeeklySales) ? mTarget.targetWeeklySales : (info.targetWeeklySales || { w1:0, w2:0, w3:0, w4:0, w5:0 });
 
                 aggregates[key] = {
                     storeName: info.storeName,
@@ -1242,7 +1239,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: info.role || '-',
                     targetCount: finalTarget,
                     targetMonthlySales: finalSales,
-                    targetWeeklySales: finalWeeklySales, // [수정] 데이터 포함
                     count: 0,
                     rank: 0,
                     rate: 0
@@ -1364,15 +1360,30 @@ app.get('/api/jwasu/admin/managers', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+// [수정] 매니저 등록 시 중복 체크 강화 (매장+이름+직급)
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { storeName, managerName, role, consignment, targetCount, targetMonthlySales, targetWeeklySales, isActive } = req.body;
         if (!storeName || !managerName) return res.status(400).json({ success: false });
-        const exists = await db.collection(staffCollectionName).findOne({ storeName, managerName });
-        if (exists) return res.status(400).json({ success: false, message: '이미 등록됨' });
+        
+        // ★ [변경] 이름뿐만 아니라 직급(role)까지 포함하여 중복 체크
+        // role이 없는 경우(기존 데이터) 고려하여 $or 조건 또는 기본값 처리 필요하지만, 
+        // 신규 등록이므로 role은 필수값으로 처리하거나 빈 문자열로 처리
+        const checkRole = role || '';
+
+        const exists = await db.collection(staffCollectionName).findOne({ 
+            storeName, 
+            managerName,
+            role: checkRole
+        });
+        
+        if (exists) return res.status(400).json({ success: false, message: '이미 등록된 매니저입니다 (동일 매장/이름/직급).' });
 
         await db.collection(staffCollectionName).insertOne({
-            storeName, managerName, role: role || '매니저', consignment: consignment || 'N',
+            storeName, 
+            managerName, 
+            role: role || '매니저', 
+            consignment: consignment || 'N',
             targetCount: parseInt(targetCount) || 0,
             targetMonthlySales: parseInt(targetMonthlySales) || 0,
             targetWeeklySales: parseInt(targetWeeklySales) || 0,
@@ -1655,6 +1666,7 @@ app.get('/api/event-winners', async (req, res) => {
       res.status(500).json({ success: false, winners: [] });
     }
 });
+
 // 2. [이벤트 참여 API]
 app.post('/api/play-event', async (req, res) => {
     try {
@@ -1662,7 +1674,7 @@ app.post('/api/play-event', async (req, res) => {
   
       // ★ 크리스마스 이벤트 확률 데이터 부분
       const MAX_DAILY_WINNERS = 10; 
-      const WIN_PROBABILITY_PERCENT = 8; 
+      const WIN_PROBABILITY_PERCENT = 10; 
   
       // ★ 쿠폰 정보 (실제 발급될 쿠폰 번호와 이동 URL)
       const PRIZE_COUPON_NO = "6083836502100001083";
