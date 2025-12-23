@@ -1314,8 +1314,6 @@ app.get('/api/jwasu/table', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: '서버 내부 오류' }); }
 });
 
-// ... (Cafe24 API 생략 - 기존 유지) ...
-
 // ==========================================
 // [섹션 G] 월별 목표 관리 API (팝업용)
 // ==========================================
@@ -1331,8 +1329,27 @@ app.get('/api/jwasu/admin/monthly-target', async (req, res) => {
 
 app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
     try {
-        const { month, storeName, managerName, targetCount, targetMonthlySales, targetWeeklySales } = req.body;
-        let weeklySalesData = targetWeeklySales || { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+        // [수정] targetWeeklySales 내부 값도 강제 형변환 (String -> Int)
+        const { month, storeName, managerName, targetCount, targetMonthlySales, targetWeeklySales, w1, w2, w3, w4, w5 } = req.body;
+        
+        let weeklySalesData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+
+        // 1. 객체로 들어온 경우 (targetWeeklySales)
+        if (targetWeeklySales && typeof targetWeeklySales === 'object') {
+            weeklySalesData.w1 = parseInt(targetWeeklySales.w1) || 0;
+            weeklySalesData.w2 = parseInt(targetWeeklySales.w2) || 0;
+            weeklySalesData.w3 = parseInt(targetWeeklySales.w3) || 0;
+            weeklySalesData.w4 = parseInt(targetWeeklySales.w4) || 0;
+            weeklySalesData.w5 = parseInt(targetWeeklySales.w5) || 0;
+        } 
+        // 2. 개별 필드로 들어온 경우 (w1, w2...) - 프론트 수정안 대비
+        else {
+            weeklySalesData.w1 = parseInt(w1) || 0;
+            weeklySalesData.w2 = parseInt(w2) || 0;
+            weeklySalesData.w3 = parseInt(w3) || 0;
+            weeklySalesData.w4 = parseInt(w4) || 0;
+            weeklySalesData.w5 = parseInt(w5) || 0;
+        }
 
         await db.collection(monthlyTargetCollection).updateOne(
             { month, storeName, managerName },
@@ -1340,14 +1357,17 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
                 $set: { 
                     targetCount: parseInt(targetCount) || 0,
                     targetMonthlySales: parseInt(targetMonthlySales) || 0,
-                    targetWeeklySales: weeklySalesData, 
+                    targetWeeklySales: weeklySalesData, // 정제된 숫자 데이터 저장
                     updatedAt: new Date()
                 } 
             },
             { upsert: true }
         );
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ success: false }); }
+    } catch (error) { 
+        console.error("목표 저장 오류:", error);
+        res.status(500).json({ success: false }); 
+    }
 });
 
 // ==========================================
