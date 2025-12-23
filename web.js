@@ -1464,6 +1464,10 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+
+
+
+
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1472,14 +1476,29 @@ app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false }); }
 });
-
+// [매니저 삭제 API]
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
-        res.json({ success: true });
-    } catch (error) { res.status(500).json({ success: false }); }
+        
+        // ID 유효성 검사
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "유효하지 않은 ID입니다." });
+        }
+
+        const result = await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
+        
+        if (result.deletedCount === 1) {
+            res.json({ success: true, message: "삭제되었습니다." });
+        } else {
+            res.status(404).json({ success: false, message: "해당 매니저를 찾을 수 없습니다." });
+        }
+    } catch (error) {
+        console.error("삭제 오류:", error);
+        res.status(500).json({ success: false, message: "서버 오류로 삭제 실패" });
+    }
 });
+
 
 // [섹션 - 기타 통계] - my-stats 추가
 app.get('/api/jwasu/my-stats', async (req, res) => {
