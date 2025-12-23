@@ -1299,6 +1299,52 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
     }
 });
+
+// ==========================================
+// [섹션 - 통합 조회] 테이블 API (좌수 데이터 로드용) - 누락된 부분 복구
+// ==========================================
+app.get('/api/jwasu/table', async (req, res) => {
+    try {
+        const { store, startDate, endDate } = req.query;
+        
+        // 1. 날짜 및 매장 필터 조건 생성
+        let query = {};
+        
+        // 날짜 필터
+        if (startDate && endDate) {
+            query.date = { $gte: startDate, $lte: endDate };
+        }
+        
+        // 매장 필터
+        if (store && store !== 'all') {
+            query.storeName = store; 
+        }
+
+        // 2. DB에서 좌수 데이터 조회 (offline_jwasu 컬렉션)
+        const jwasuList = await db.collection(jwasuCollectionName)
+                                  .find(query)
+                                  .sort({ date: -1 }) // 최신순 정렬
+                                  .toArray();
+
+        // 3. 클라이언트로 보낼 데이터 포맷팅
+        const report = jwasuList.map(item => ({
+            type: 'jwasu',
+            date: item.date,
+            storeName: item.storeName || '알수없음',
+            managerName: item.managerName || '미지정',
+            role: item.role || '-',
+            count: item.count || 0,
+            revenue: 0 // 매출은 별도 API(manager-sales)에서 합치므로 여기선 0
+        }));
+        
+        res.status(200).json({ success: true, report: report });
+
+    } catch (error) {
+        console.error("좌수 테이블 조회 오류:", error);
+        res.status(500).json({ success: false, message: '서버 내부 오류' });
+    }
+});
+
 // ==========================================
 // [섹션 G] 월별 목표 관리 API (팝업용)
 // ==========================================
