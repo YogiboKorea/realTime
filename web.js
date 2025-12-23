@@ -1124,7 +1124,6 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
     }
 });
-
 // 3. [GET] 대시보드 데이터 조회
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
@@ -1188,14 +1187,14 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 }
             }
 
-            // 비활성 매니저도 기록이 있으면 보여줘야 함
-            // if (!info || info.isActive === false) return; 
-
             const mTarget = monthlyTargetMap[uniqueKey];
 
             let finalTarget = 0;
             let finalSales = 0;
+            // [추가] 주간 목표 변수
+            let finalWeekly = { w1:0, w2:0, w3:0, w4:0, w5:0 };
 
+            // 목표 우선순위: 월별설정(monthlyTarget) > 매니저기본설정(staffInfo)
             if (mTarget && mTarget.targetCount > 0) finalTarget = mTarget.targetCount;
             else if (record.targetCount > 0) finalTarget = record.targetCount;
             else if (info) finalTarget = info.targetCount;
@@ -1204,6 +1203,11 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             else if (record.targetMonthlySales > 0) finalSales = record.targetMonthlySales;
             else if (info) finalSales = info.targetMonthlySales;
 
+            // [추가] 주간 목표 결정 로직
+            if (mTarget && mTarget.targetWeeklySales) finalWeekly = mTarget.targetWeeklySales;
+            else if (record.targetWeeklySales) finalWeekly = record.targetWeeklySales;
+            else if (info && info.targetWeeklySales) finalWeekly = info.targetWeeklySales;
+
             if (!aggregates[uniqueKey]) {
                 aggregates[uniqueKey] = { 
                     storeName: info ? info.storeName : record.storeName,
@@ -1211,13 +1215,19 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: record.role || (info ? info.role : '-'),
                     targetCount: finalTarget, 
                     targetMonthlySales: finalSales,
+                    targetWeeklySales: finalWeekly, // [추가] 결과에 주간목표 포함
                     count: 0, 
                     rank: 0,
                     rate: 0
                 };
             } else {
-                if (aggregates[uniqueKey].targetCount === 0 && finalTarget > 0) {
-                    aggregates[uniqueKey].targetCount = finalTarget;
+                // 기존 집계 데이터가 있는데 목표가 0이면 업데이트 (보완)
+                if (aggregates[uniqueKey].targetCount === 0 && finalTarget > 0) aggregates[uniqueKey].targetCount = finalTarget;
+                if (aggregates[uniqueKey].targetMonthlySales === 0 && finalSales > 0) aggregates[uniqueKey].targetMonthlySales = finalSales;
+                // 주간 목표도 업데이트 확인
+                const currW = aggregates[uniqueKey].targetWeeklySales;
+                if ((!currW || (currW.w1===0 && currW.w2===0)) && (finalWeekly.w1>0 || finalWeekly.w2>0)) {
+                    aggregates[uniqueKey].targetWeeklySales = finalWeekly;
                 }
             }
             
@@ -1232,6 +1242,8 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 
                 const finalTarget = (mTarget && mTarget.targetCount > 0) ? mTarget.targetCount : (info.targetCount || 0);
                 const finalSales = (mTarget && mTarget.targetMonthlySales > 0) ? mTarget.targetMonthlySales : (info.targetMonthlySales || 0);
+                // [추가] 주간 목표 로직
+                const finalWeekly = (mTarget && mTarget.targetWeeklySales) ? mTarget.targetWeeklySales : (info.targetWeeklySales || { w1:0, w2:0, w3:0, w4:0, w5:0 });
 
                 aggregates[key] = {
                     storeName: info.storeName,
@@ -1239,6 +1251,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: info.role || '-',
                     targetCount: finalTarget,
                     targetMonthlySales: finalSales,
+                    targetWeeklySales: finalWeekly, // [추가] 결과에 포함
                     count: 0,
                     rank: 0,
                     rate: 0
@@ -1272,7 +1285,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
     }
 });
-
 // [기타 조회 API]
 app.get('/api/jwasu/stores', (req, res) => { res.json({ success: true, stores: OFFLINE_STORES }); });
 
