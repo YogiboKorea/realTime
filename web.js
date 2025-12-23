@@ -1124,6 +1124,7 @@ app.post('/api/jwasu/undo', async (req, res) => {
         res.status(500).json({ success: false, message: '취소 처리 중 오류 발생' });
     }
 });
+
 // 3. [GET] 대시보드 데이터 조회
 app.get('/api/jwasu/dashboard', async (req, res) => {
     try {
@@ -1170,7 +1171,7 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
 
         const aggregates = {};
         
-        // 4. 집계 시작
+        // 4. 집계 시작 (기록이 있는 경우)
         records.forEach(record => {
             const mgr = record.managerName || '미지정';
             const normName = normalize(mgr);
@@ -1191,10 +1192,10 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
 
             let finalTarget = 0;
             let finalSales = 0;
-            // [추가] 주간 목표 변수
             let finalWeekly = { w1:0, w2:0, w3:0, w4:0, w5:0 };
+            let joinDate = null; // [추가] 입사일 변수
 
-            // 목표 우선순위: 월별설정(monthlyTarget) > 매니저기본설정(staffInfo)
+            // 목표 및 입사일 우선순위: 월별설정(monthlyTarget) > 매니저기본설정(staffInfo)
             if (mTarget && mTarget.targetCount > 0) finalTarget = mTarget.targetCount;
             else if (record.targetCount > 0) finalTarget = record.targetCount;
             else if (info) finalTarget = info.targetCount;
@@ -1203,10 +1204,13 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             else if (record.targetMonthlySales > 0) finalSales = record.targetMonthlySales;
             else if (info) finalSales = info.targetMonthlySales;
 
-            // [추가] 주간 목표 결정 로직
             if (mTarget && mTarget.targetWeeklySales) finalWeekly = mTarget.targetWeeklySales;
             else if (record.targetWeeklySales) finalWeekly = record.targetWeeklySales;
             else if (info && info.targetWeeklySales) finalWeekly = info.targetWeeklySales;
+
+            // [추가] 입사일 결정 로직
+            if (mTarget && mTarget.joinDate) joinDate = mTarget.joinDate;
+            else if (info && info.joinDate) joinDate = info.joinDate;
 
             if (!aggregates[uniqueKey]) {
                 aggregates[uniqueKey] = { 
@@ -1215,19 +1219,24 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: record.role || (info ? info.role : '-'),
                     targetCount: finalTarget, 
                     targetMonthlySales: finalSales,
-                    targetWeeklySales: finalWeekly, // [추가] 결과에 주간목표 포함
+                    targetWeeklySales: finalWeekly, // [확인] 주간목표 포함
+                    joinDate: joinDate,             // [추가] 입사일 포함
                     count: 0, 
                     rank: 0,
                     rate: 0
                 };
             } else {
-                // 기존 집계 데이터가 있는데 목표가 0이면 업데이트 (보완)
+                // 기존 데이터 보완 업데이트
                 if (aggregates[uniqueKey].targetCount === 0 && finalTarget > 0) aggregates[uniqueKey].targetCount = finalTarget;
                 if (aggregates[uniqueKey].targetMonthlySales === 0 && finalSales > 0) aggregates[uniqueKey].targetMonthlySales = finalSales;
-                // 주간 목표도 업데이트 확인
+                
                 const currW = aggregates[uniqueKey].targetWeeklySales;
                 if ((!currW || (currW.w1===0 && currW.w2===0)) && (finalWeekly.w1>0 || finalWeekly.w2>0)) {
                     aggregates[uniqueKey].targetWeeklySales = finalWeekly;
+                }
+                // 입사일 업데이트
+                if (!aggregates[uniqueKey].joinDate && joinDate) {
+                    aggregates[uniqueKey].joinDate = joinDate;
                 }
             }
             
@@ -1242,8 +1251,12 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 
                 const finalTarget = (mTarget && mTarget.targetCount > 0) ? mTarget.targetCount : (info.targetCount || 0);
                 const finalSales = (mTarget && mTarget.targetMonthlySales > 0) ? mTarget.targetMonthlySales : (info.targetMonthlySales || 0);
-                // [추가] 주간 목표 로직
                 const finalWeekly = (mTarget && mTarget.targetWeeklySales) ? mTarget.targetWeeklySales : (info.targetWeeklySales || { w1:0, w2:0, w3:0, w4:0, w5:0 });
+                
+                // [추가] 입사일 결정 로직
+                let joinDate = null;
+                if (mTarget && mTarget.joinDate) joinDate = mTarget.joinDate;
+                else if (info && info.joinDate) joinDate = info.joinDate;
 
                 aggregates[key] = {
                     storeName: info.storeName,
@@ -1251,7 +1264,8 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: info.role || '-',
                     targetCount: finalTarget,
                     targetMonthlySales: finalSales,
-                    targetWeeklySales: finalWeekly, // [추가] 결과에 포함
+                    targetWeeklySales: finalWeekly, // [확인] 주간목표 포함
+                    joinDate: joinDate,             // [추가] 입사일 포함
                     count: 0,
                     rank: 0,
                     rate: 0
@@ -1285,47 +1299,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         res.status(500).json({ success: false, message: '대시보드 데이터 조회 오류' });
     }
 });
-// [기타 조회 API]
-app.get('/api/jwasu/stores', (req, res) => { res.json({ success: true, stores: OFFLINE_STORES }); });
-
-// [섹션 - 통합 조회] 테이블 API
-app.get('/api/jwasu/table', async (req, res) => {
-    try {
-        const { store, startDate, endDate } = req.query;
-        const startStr = startDate || new Date().toISOString().split('T')[0];
-        const endStr = endDate || new Date().toISOString().split('T')[0];
-        const startObj = new Date(startStr + 'T00:00:00.000Z'); 
-        const endObj = new Date(endStr + 'T23:59:59.999Z');
-        
-        const activeStaffs = await db.collection(staffCollectionName).find({ $or: [ { isActive: true }, { isActive: { $exists: false } } ] }).toArray();
-        const activeSet = new Set(activeStaffs.map(s => `${s.storeName}_${s.managerName}`));
-
-        let salesQuery = { createdAt: { $gte: startObj, $lte: endObj } };
-        if (store && store !== 'all') salesQuery.store = { $in: store.split(',') };
-        const salesData = await db.collection('sales').find(salesQuery).sort({ createdAt: -1 }).toArray();
-
-        let jwasuQuery = { date: { $gte: startStr, $lte: endStr } };
-        if (store && store !== 'all') jwasuQuery.storeName = { $in: store.split(',') };
-        const jwasuList = await db.collection(jwasuCollectionName).find(jwasuQuery).sort({ date: -1 }).toArray();
-
-        const report = [];
-        jwasuList.forEach(j => {
-            const mgrName = j.managerName || '미지정';
-            const uniqueKey = `${j.storeName}_${mgrName}`;
-            if (activeSet.has(uniqueKey) || mgrName === '미지정') {
-                report.push({ type: 'jwasu', date: j.date, storeName: j.storeName || '알수없음', managerName: mgrName, role: j.role || '-', consignment: j.consignment || 'N', count: j.count || 0, revenue: 0 });
-            }
-        });
-        salesData.forEach(s => {
-            let dateStr = startStr;
-            if (s.createdAt) { try { const kDate = new Date(s.createdAt.getTime() + (9 * 60 * 60 * 1000)); dateStr = kDate.toISOString().split('T')[0]; } catch (e) { dateStr = startStr; } }
-            report.push({ type: 'sales', date: dateStr, storeName: s.store || '알수없음', managerName: '매출집계', role: '-', count: 0, revenue: s.revenue || 0 });
-        });
-        
-        res.status(200).json({ success: true, report: report });
-    } catch (error) { res.status(500).json({ success: false, message: '서버 내부 오류' }); }
-});
-
 // ==========================================
 // [섹션 G] 월별 목표 관리 API (팝업용)
 // ==========================================
