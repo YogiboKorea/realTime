@@ -1453,16 +1453,48 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
+
+
+// [매니저 정보 수정 API] - 메모(memo) 저장 기능 추가
 app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { storeName, managerName, role, consignment, targetCount, targetMonthlySales, targetWeeklySales } = req.body;
+        
+        // 1. 프론트엔드에서 보낸 데이터 중 'memo'를 받습니다.
+        const { 
+            storeName, 
+            managerName, 
+            role, 
+            consignment, 
+            targetCount, 
+            targetMonthlySales, 
+            targetWeeklySales, 
+            memo // <--- 여기 추가됨
+        } = req.body;
+
         await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
-            { $set: { storeName, managerName, role, consignment, targetCount: parseInt(targetCount)||0, targetMonthlySales: parseInt(targetMonthlySales)||0, targetWeeklySales: parseInt(targetWeeklySales)||0, updatedAt: new Date() } }
+            { 
+                $set: { 
+                    storeName, 
+                    managerName, 
+                    role, 
+                    consignment, 
+                    targetCount: parseInt(targetCount) || 0, 
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0, 
+                    targetWeeklySales: parseInt(targetWeeklySales) || 0,
+                    
+                    memo: memo, // <--- 2. DB에 메모 내용을 저장합니다.
+                    
+                    updatedAt: new Date() 
+                } 
+            }
         );
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ success: false }); }
+    } catch (error) { 
+        console.error("매니저 수정 오류:", error);
+        res.status(500).json({ success: false }); 
+    }
 });
 
 
