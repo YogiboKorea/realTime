@@ -915,74 +915,87 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 // ==========================================
 // [섹션 - Cafe24 연동] 상품 정보 가져오기 (전체 검색 + 옵션 포함)
 // ==========================================
-
 app.get('/api/cafe24/products', async (req, res) => {
     try {
-        const { keyword } = req.query; // 프론트에서 보낸 검색어
+        const { keyword } = req.query;
+        
+        console.log('------------------------------------------------');
+        console.log(`1. [요청] 검색어: "${keyword}"`);
 
-        // 검색어가 없으면 빈 배열 반환 (전체 1000개 로딩 방지)
         if (!keyword) {
             return res.json({ success: true, count: 0, data: [] });
         }
-        
-        console.log(`[Cafe24] 상품 검색 요청: "${keyword}"`);
 
-        // 1. Cafe24 Admin API 파라미터 구성
+        // Cafe24 API 파라미터
         const apiParams = {
-            display: 'T',        // 진열 중
-            selling: 'T',        // 판매 중
-            limit: 50,           // 검색 결과 최대 50개
-            embed: 'options',    // ★ 핵심: 옵션 상세 정보 포함
-            fields: 'product_no,product_name,price,product_code,has_option,options', 
-            product_name: keyword // ★ 핵심: 카테고리 대신 이름으로 검색
+            'shop_no': 1,           // 기본 상점 번호 (필수일 수 있음)
+            'product_name': keyword, // 상품명 검색
+            'display': 'T',         // 진열된 상품만
+            'selling': 'T',         // 판매중인 상품만
+            'embed': 'options',     // 옵션 포함
+            'fields': 'product_no,product_name,price,product_code,has_option,options',
+            'limit': 50
         };
 
-        // 2. API 호출 (apiRequest 함수 재사용)
-        // category 파라미터를 넣지 않았으므로 전체 카테고리에서 검색됨
-        const response = await apiRequest(
-            'GET', 
-            `https://${MALLID}.cafe24api.com/api/v2/admin/products`, 
-            null, 
-            apiParams
-        );
+        console.log('2. [API 호출] 파라미터:', apiParams);
 
-        const products = response.products;
+        // API 호출
+        // 주의: apiRequest 함수 내부에서 axios 요청 시 params를 잘 넘기는지 확인 필요
+        // 여기서는 apiRequest 대신 axios를 직접 써서 테스트 해봅니다 (오류 원인 격리)
+        const response = await axios.get(`https://${MALLID}.cafe24api.com/api/v2/admin/products`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`, // 전역 변수 accessToken 사용
+                'Content-Type': 'application/json',
+                'X-Cafe24-Api-Version': '2023-03-01'
+            },
+            params: apiParams
+        });
 
-        // 3. 데이터 정제 (프론트엔드 맞춤형)
+        // 결과 확인
+        const products = response.data.products;
+        console.log(`3. [API 응답] 검색된 상품 수: ${products ? products.length : 0}개`);
+
+        if (!products || products.length === 0) {
+            console.log('   (검색 결과가 없습니다. Cafe24 상품관리에서 상품명과 진열상태를 확인하세요)');
+            return res.json({ success: true, count: 0, data: [] });
+        }
+
+        // 데이터 가공
         const cleanData = products.map(item => {
             let myOptions = [];
-
-            // 옵션이 존재하고(has_option='T'), 데이터가 잘 왔는지 확인
             if (item.has_option === 'T' && item.options && item.options.options) {
-                
-                // Cafe24는 옵션이 여러 개일 수 있음 (예: 색상, 사이즈, 추가구성)
-                // '색상'이라는 단어가 들어간 옵션을 찾거나, 없으면 첫 번째 옵션을 사용
+                // "색상"이 포함된 옵션 찾기, 없으면 첫번째꺼
                 const targetOption = item.options.options.find(opt => opt.option_name.includes('색상')) 
                                      || item.options.options[0];
-
+                
                 if (targetOption && targetOption.option_value) {
-                    // 프론트엔드 select 박스에 넣기 좋게 매핑
                     myOptions = targetOption.option_value.map(val => ({
-                        option_code: val.value_no,  // DB 저장용 코드 (또는 val.value)
-                        option_name: val.value_name // 화면 표시용 이름 (예: 레드, 다크그레이)
+                        option_code: val.value_no,
+                        option_name: val.value_name
                     }));
                 }
             }
-
             return {
                 product_no: item.product_no,
                 product_name: item.product_name,
-                price: Math.floor(Number(item.price)), // 소수점 제거
-                options: myOptions // [{option_code:..., option_name:...}, ...]
+                price: Math.floor(Number(item.price)),
+                options: myOptions
             };
         });
 
-        console.log(`[Cafe24] 검색 완료: ${cleanData.length}건`);
         res.json({ success: true, count: cleanData.length, data: cleanData });
 
     } catch (error) {
-        console.error('[Cafe24] 상품 조회 실패:', error.response ? error.response.data : error.message);
-        res.status(500).json({ success: false, message: 'Cafe24 상품 로드 실패' });
+        console.error('------------------------------------------------');
+        console.error('🔴 [오류 발생] Cafe24 API 에러 상세:');
+        if (error.response) {
+            // Cafe24가 보내준 에러 메시지 (여기가 제일 중요)
+            console.error('Status:', error.response.status);
+            console.error('Data:', JSON.stringify(error.response.data, null, 2));
+        } else {
+            console.error(error.message);
+        }
+        res.status(500).json({ success: false, message: '서버 에러 발생' });
     }
 });
 
