@@ -912,11 +912,9 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 });
 
 //해당 위치부터 오프라인 주문서 section입니다.
+
 // ==========================================
-// [섹션 - Cafe24 연동] 상품 정보 가져오기 (전체 검색 + 옵션 포함)
-// ==========================================
-// ==========================================
-// [API] 상품 검색 (옵션 포함 + 전체 검색)
+// [API] Cafe24 상품 검색 (옵션 자동 감지 강화)
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -930,7 +928,6 @@ app.get('/api/cafe24/products', async (req, res) => {
         console.log(`[Cafe24] 상품 검색 요청: "${keyword}"`);
 
         // 1. Cafe24 API 호출 (apiRequest 함수 사용으로 토큰 자동 갱신)
-        // category 파라미터 없이 product_name으로 검색 -> 전체 카테고리 대상
         const response = await apiRequest(
             'GET',
             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
@@ -948,20 +945,38 @@ app.get('/api/cafe24/products', async (req, res) => {
 
         const products = response.products;
 
-        // 2. 프론트엔드용 데이터 정제
+        // 3. 데이터 정제 (옵션 추출 로직 강화)
         const cleanData = products.map(item => {
             let myOptions = [];
 
-            // 옵션 데이터 파싱 (Cafe24의 복잡한 구조를 단순화)
-            if (item.has_option === 'T' && item.options && item.options.options) {
-                // '색상'이라는 옵션을 찾거나, 없으면 첫 번째 옵션을 사용
-                const targetOption = item.options.options.find(opt => opt.option_name.includes('색상')) 
-                                     || item.options.options[0];
+            // [로직 강화] 옵션 데이터가 들어있는 진짜 배열 위치 찾기
+            let rawOptionList = [];
+            
+            if (item.options) {
+                if (Array.isArray(item.options)) {
+                    // Case A: options가 바로 배열인 경우 (일부 구형 상품 등)
+                    rawOptionList = item.options;
+                } else if (item.options.options && Array.isArray(item.options.options)) {
+                    // Case B: options 객체 안에 options 배열이 있는 경우 (최신 표준)
+                    rawOptionList = item.options.options;
+                }
+            }
+
+            // 2. 옵션이 존재하면 파싱 시작
+            if (item.has_option === 'T' && rawOptionList.length > 0) {
                 
+                // '색상', 'Color', '컬러'라는 단어가 들어간 옵션을 우선 찾음
+                // 만약 못 찾으면 무조건 첫 번째(0번) 옵션을 가져옴 (사이즈만 있거나 다른 이름일 경우 대비)
+                const targetOption = rawOptionList.find(opt => 
+                    opt.option_name.includes('색상') || 
+                    opt.option_name.includes('Color') ||
+                    opt.option_name.includes('컬러')
+                ) || rawOptionList[0];
+
                 if (targetOption && targetOption.option_value) {
                     myOptions = targetOption.option_value.map(val => ({
-                        option_code: val.value_no,  // 옵션 고유 번호
-                        option_name: val.value_name // 옵션 이름 (Red, Blue 등)
+                        option_code: val.value_no || val.value_code, // 코드값 안전하게 가져오기
+                        option_name: val.value_name || val.option_text // 이름값 안전하게 가져오기
                     }));
                 }
             }
@@ -969,7 +984,7 @@ app.get('/api/cafe24/products', async (req, res) => {
             return {
                 product_no: item.product_no,
                 product_name: item.product_name,
-                price: Math.floor(Number(item.price)), // 가격 정수형 변환
+                price: Math.floor(Number(item.price)),
                 options: myOptions
             };
         });
@@ -982,6 +997,8 @@ app.get('/api/cafe24/products', async (req, res) => {
         res.status(500).json({ success: false, message: '상품 정보를 가져오는데 실패했습니다.' });
     }
 });
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
