@@ -913,7 +913,7 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 //해당 위치부터 오프라인 주문서 section입니다.
 // ==========================================
-// [API] Cafe24 상품 검색 (오래된 순 정렬)
+// [API] Cafe24 상품 검색 (등록순 정렬 수정판)
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -923,7 +923,7 @@ app.get('/api/cafe24/products', async (req, res) => {
             return res.json({ success: true, count: 0, data: [] });
         }
 
-        console.log(`[Cafe24] 검색 시작 (Oldest First): "${keyword}"`);
+        console.log(`[Cafe24] 검색 요청: "${keyword}" (등록순)`);
 
         // 1. Cafe24 API 호출
         const response = await apiRequest(
@@ -939,21 +939,19 @@ app.get('/api/cafe24/products', async (req, res) => {
                 'fields': 'product_no,product_name,price,product_code,has_option,options',
                 'limit': 50,
                 
-                // ★ 핵심 수정: 정렬 기준 변경 ★
-                // regist_date_desc : 최신순 (기본값)
-                // regist_date_asc  : 오래된순 (등록일 순)
-                'sort': 'regist_date_asc' 
+                // ★ 수정됨: 파라미터 이름을 'sort' -> 'order'로 변경
+                // product_no_asc : 상품번호 오름차순 (1번부터 = 옛날 상품부터)
+                'order': 'product_no_asc' 
             }
         );
 
         const products = response.products;
 
-        // 2. 데이터 정제 (옵션 추출 로직 유지)
+        // 2. 데이터 정제 (옵션 추출 로직 - 이전과 동일)
         const cleanData = products.map(item => {
             let myOptions = [];
             let rawOptionList = [];
 
-            // 배열 위치 찾기
             if (item.options) {
                 if (Array.isArray(item.options)) {
                     rawOptionList = item.options;
@@ -962,15 +960,12 @@ app.get('/api/cafe24/products', async (req, res) => {
                 }
             }
 
-            // 옵션 파싱
             if (rawOptionList.length > 0) {
-                // '색상' 관련 옵션 찾기
                 let targetOption = rawOptionList.find(opt => {
                     const name = (opt.option_name || "").toLowerCase();
                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
                 });
 
-                // 없으면 첫 번째 옵션 사용
                 if (!targetOption && rawOptionList.length > 0) {
                     targetOption = rawOptionList[0];
                 }
@@ -995,7 +990,14 @@ app.get('/api/cafe24/products', async (req, res) => {
         res.json({ success: true, count: cleanData.length, data: cleanData });
 
     } catch (error) {
-        console.error('[Cafe24] API 오류:', error.response ? error.response.data : error.message);
+        // 에러 로그를 좀 더 자세히 출력
+        console.error('🔴 [Cafe24 API 오류]');
+        if (error.response) {
+            console.error('Status:', error.response.status);
+            console.error('Msg:', JSON.stringify(error.response.data));
+        } else {
+            console.error('Error:', error.message);
+        }
         res.status(500).json({ success: false, message: '서버 오류 발생' });
     }
 });
