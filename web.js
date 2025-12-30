@@ -17,6 +17,8 @@ const path = require('path');
 // --- 2. Express 앱 및 포트 설정 ---
 const app = express();
 app.use(cors());
+app.use(express.json()); 
+app.use(express.urlencoded({ extended: true })); // 혹시 모를 폼 데이터 대비
 const PORT = 8014; // 8014 포트로 통일
 
 // --- 3. 전역 변수 및 .env 설정 ---
