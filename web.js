@@ -18,20 +18,20 @@ const path = require('path');
 const app = express();
 app.use(cors());
 app.use(express.json()); 
-app.use(express.urlencoded({ extended: true })); // 혹시 모를 폼 데이터 대비
+app.use(express.urlencoded({ extended: true })); 
 const PORT = 8014; // 8014 포트로 통일
 
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; // 초기값
-let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; // 초기값
+let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; 
+let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
-const mongoUri = process.env.MONGO_URI;
-const dbName = process.env.DB_NAME;
-const collectionName = process.env.COLLECTION_NAME; // 랭킹 상품 데이터
+const mongoUri = process.env.MONGO_URI; // .env에서 로드
+const dbName = process.env.DB_NAME || 'yogibo'; // 없을 경우 기본값
+const collectionName = process.env.COLLECTION_NAME; 
 const tokenCollectionName = 'tokens';
 const rankingCollectionName = 'rankings';
 const MALLID = 'yogibo';
@@ -45,8 +45,7 @@ const mongoClient = new MongoClient(mongoUri, {
 let db; // 전역 DB 객체
 
 
-
-// MongoDB에서 토큰 읽기 (전역 db 사용)
+// MongoDB에서 토큰 읽기
 async function getTokensFromDB() {
     try {
         const collection = db.collection(tokenCollectionName);
@@ -63,7 +62,7 @@ async function getTokensFromDB() {
     }
 }
 
-// MongoDB에 토큰 저장 (전역 db 사용)
+// MongoDB에 토큰 저장
 async function saveTokensToDB(newAccessToken, newRefreshToken) {
     try {
         const collection = db.collection(tokenCollectionName);
@@ -103,8 +102,8 @@ async function refreshAccessToken() {
         const newRefreshToken = response.data.refresh_token;
         console.log('Access Token 갱신 성공');
         await saveTokensToDB(newAccessToken, newRefreshToken);
-        accessToken = newAccessToken; // 전역 변수 업데이트
-        refreshToken = newRefreshToken; // 전역 변수 업데이트
+        accessToken = newAccessToken; 
+        refreshToken = newRefreshToken; 
         return newAccessToken;
     } catch (error) {
         if (error.response?.data?.error === 'invalid_grant') {
@@ -133,8 +132,8 @@ async function apiRequest(method, url, data = {}, params = {}) {
     } catch (error) {
         if (error.response?.status === 401) {
             console.log('Access Token 만료. 갱신 중...');
-            await refreshAccessToken(); // 갱신
-            return apiRequest(method, url, data, params); // 재시도
+            await refreshAccessToken(); 
+            return apiRequest(method, url, data, params); 
         } else {
             console.error('API 요청 오류:', error.response ? error.response.data : error.message);
             throw error;
@@ -144,31 +143,15 @@ async function apiRequest(method, url, data = {}, params = {}) {
 
 
 
-/**
- * [좌수왕 서버 통합 라우트]
- * * 필수 요구사항:
- * 1. 상단에 const { ObjectId } = require('mongodb'); 가 선언되어 있어야 합니다.
- * 2. db 변수는 MongoDB 데이터베이스 연결 객체여야 합니다. (DB_NAME: yogibo)
- * 3. moment-timezone 라이브러리가 로드되어 있어야 합니다.
- */
-
-
 // ==========================================
 // [설정] 컬렉션 이름 정의
 // ==========================================
 const jwasuCollectionName = 'offline_jwasu';      // [좌수] 일별 카운트 기록
-const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매니저 정보 (Admin 등록)
-const monthlyTargetCollection = 'jwasu_monthly_targets'; // [NEW] 월별 목표 관리 컬렉션
-const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니저 컬렉션
-const managerSalesCollection = 'manager_salesNew';   // [NEW] 매니저별 매출 기록 (엑셀 업로드용)
-
-// 관리 대상 매장 리스트
-const OFFLINE_STORES = [
-    "롯데안산", "롯데동탄", "롯데대구", "신세계센텀시티몰",
-    "스타필드고양", "스타필드하남", "현대미아", "현대울산",
-    "롯데광복", "신세계광주", "신세계대구", "현대중동", "롯데평촌",
-    "아브뉴프랑 광교", "현대무역센터", "더현대서울", "커넥트현대 청주", "현대충청", "NC강남"
-];
+const staffCollectionName = 'jwasu_managers';     // [관리] 오프라인 매니저 정보
+const monthlyTargetCollection = 'jwasu_monthly_targets'; // [NEW] 월별 목표 관리
+const cafe24ManagerCollection = 'managers';       // [Legacy] Cafe24용 매니저
+const managerSalesCollection = 'manager_salesNew';   // [NEW] 매니저별 매출 기록
+const orderCollectionName = 'offline_orders';     // ★ [NEW] 오프라인 주문 내역 저장용 컬렉션
 
 // ==========================================
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
@@ -203,11 +186,6 @@ app.post('/api/jwasu/increment', async (req, res) => {
         const { storeName, managerName } = req.body;
         const mgrName = managerName || '미지정';
 
-        // ★ [수정] 매장명 검증 로직 완화 (미지정 매장도 카운트 가능하도록 주석 처리)
-        // if (!OFFLINE_STORES.includes(storeName)) {
-        //     return res.status(400).json({ success: false, message: '등록되지 않은 매장입니다.' });
-        // }
-
         const now = moment().tz('Asia/Seoul');
         const todayStr = now.format('YYYY-MM-DD');
         const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
@@ -223,7 +201,7 @@ app.post('/api/jwasu/increment', async (req, res) => {
         // 이번 달 설정된 목표 조회
         const monthlyTarget = await targetCollection.findOne({ month: currentMonthStr, storeName: storeName, managerName: mgrName });
 
-        // 목표 결정: 월별 목표(설정값) > 기본 정보(등록값)
+        // 목표 결정
         const finalTargetCount = (monthlyTarget && monthlyTarget.targetCount > 0) ? monthlyTarget.targetCount : (staffInfo ? staffInfo.targetCount : 0);
         const finalMonthlySales = (monthlyTarget && monthlyTarget.targetMonthlySales > 0) ? monthlyTarget.targetMonthlySales : (staffInfo ? staffInfo.targetMonthlySales : 0);
         const finalWeeklySales = (monthlyTarget && monthlyTarget.targetWeeklySales) ? monthlyTarget.targetWeeklySales : (staffInfo ? staffInfo.targetWeeklySales : 0);
@@ -314,10 +292,8 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
         const staffCollection = db.collection(staffCollectionName);
         const targetCollection = db.collection(monthlyTargetCollection);
 
-        // 공백 제거 정규화 함수
         const normalize = (str) => String(str || '').replace(/\s+/g, '').trim();
 
-        // 1. 매니저 정보 로딩
         const allStaffs = await staffCollection.find().toArray();
         const staffMap = {};
         const nameMap = {};
@@ -333,7 +309,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             if (s.isActive !== false) activeSet.add(key);
         });
 
-        // 2. 월별 목표 가져오기
         const monthlyTargets = await targetCollection.find({ month: targetMonthStr }).toArray();
         const monthlyTargetMap = {};
         monthlyTargets.forEach(t => {
@@ -341,14 +316,12 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             monthlyTargetMap[key] = t;
         });
 
-        // 3. 기록 조회
         const records = await collection.find({ 
             date: { $gte: targetStartDate, $lte: targetEndDate } 
         }).toArray();
 
         const aggregates = {};
         
-        // 4. 집계 시작 (기록이 있는 경우)
         records.forEach(record => {
             const mgr = record.managerName || '미지정';
             const normName = normalize(mgr);
@@ -370,9 +343,8 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             let finalTarget = 0;
             let finalSales = 0;
             let finalWeekly = { w1:0, w2:0, w3:0, w4:0, w5:0 };
-            let joinDate = null; // [추가] 입사일 변수
+            let joinDate = null;
 
-            // 목표 및 입사일 우선순위: 월별설정(monthlyTarget) > 매니저기본설정(staffInfo)
             if (mTarget && mTarget.targetCount > 0) finalTarget = mTarget.targetCount;
             else if (record.targetCount > 0) finalTarget = record.targetCount;
             else if (info) finalTarget = info.targetCount;
@@ -385,7 +357,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             else if (record.targetWeeklySales) finalWeekly = record.targetWeeklySales;
             else if (info && info.targetWeeklySales) finalWeekly = info.targetWeeklySales;
 
-            // [추가] 입사일 결정 로직
             if (mTarget && mTarget.joinDate) joinDate = mTarget.joinDate;
             else if (info && info.joinDate) joinDate = info.joinDate;
 
@@ -396,14 +367,13 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: record.role || (info ? info.role : '-'),
                     targetCount: finalTarget, 
                     targetMonthlySales: finalSales,
-                    targetWeeklySales: finalWeekly, // [확인] 주간목표 포함
-                    joinDate: joinDate,             // [추가] 입사일 포함
+                    targetWeeklySales: finalWeekly, 
+                    joinDate: joinDate, 
                     count: 0, 
                     rank: 0,
                     rate: 0
                 };
             } else {
-                // 기존 데이터 보완 업데이트
                 if (aggregates[uniqueKey].targetCount === 0 && finalTarget > 0) aggregates[uniqueKey].targetCount = finalTarget;
                 if (aggregates[uniqueKey].targetMonthlySales === 0 && finalSales > 0) aggregates[uniqueKey].targetMonthlySales = finalSales;
                 
@@ -411,7 +381,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 if ((!currW || (currW.w1===0 && currW.w2===0)) && (finalWeekly.w1>0 || finalWeekly.w2>0)) {
                     aggregates[uniqueKey].targetWeeklySales = finalWeekly;
                 }
-                // 입사일 업데이트
                 if (!aggregates[uniqueKey].joinDate && joinDate) {
                     aggregates[uniqueKey].joinDate = joinDate;
                 }
@@ -420,7 +389,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
             aggregates[uniqueKey].count += record.count;
         });
 
-        // 5. 기록 없는 활성 매니저 0건으로 추가
         activeSet.forEach(key => {
             if (!aggregates[key]) {
                 const info = staffMap[key];
@@ -430,7 +398,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                 const finalSales = (mTarget && mTarget.targetMonthlySales > 0) ? mTarget.targetMonthlySales : (info.targetMonthlySales || 0);
                 const finalWeekly = (mTarget && mTarget.targetWeeklySales) ? mTarget.targetWeeklySales : (info.targetWeeklySales || { w1:0, w2:0, w3:0, w4:0, w5:0 });
                 
-                // [추가] 입사일 결정 로직
                 let joinDate = null;
                 if (mTarget && mTarget.joinDate) joinDate = mTarget.joinDate;
                 else if (info && info.joinDate) joinDate = info.joinDate;
@@ -441,8 +408,8 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
                     role: info.role || '-',
                     targetCount: finalTarget,
                     targetMonthlySales: finalSales,
-                    targetWeeklySales: finalWeekly, // [확인] 주간목표 포함
-                    joinDate: joinDate,             // [추가] 입사일 포함
+                    targetWeeklySales: finalWeekly, 
+                    joinDate: joinDate, 
                     count: 0,
                     rank: 0,
                     rate: 0
@@ -452,7 +419,6 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
 
         const dashboardData = Object.values(aggregates);
 
-        // 6. 달성률 및 랭킹
         dashboardData.forEach(item => {
             if (item.targetCount > 0) {
                 item.rate = parseFloat(((item.count / item.targetCount) * 100).toFixed(1));
@@ -477,33 +443,25 @@ app.get('/api/jwasu/dashboard', async (req, res) => {
     }
 });
 
-/// ==========================================
-// [섹션 - 통합 조회] 테이블 API (좌수 데이터 로드용) - ★누락된 부분 추가★
-// ==========================================
+// [섹션 - 통합 조회] 테이블 API
 app.get('/api/jwasu/table', async (req, res) => {
     try {
         const { store, startDate, endDate } = req.query;
-        
-        // 1. 날짜 및 매장 필터 조건 생성
         let query = {};
         
-        // 날짜 필터
         if (startDate && endDate) {
             query.date = { $gte: startDate, $lte: endDate };
         }
         
-        // 매장 필터
         if (store && store !== 'all') {
             query.storeName = store; 
         }
 
-        // 2. DB에서 좌수 데이터 조회 (offline_jwasu 컬렉션)
         const jwasuList = await db.collection(jwasuCollectionName)
                                   .find(query)
-                                  .sort({ date: -1 }) // 최신순 정렬
+                                  .sort({ date: -1 })
                                   .toArray();
 
-        // 3. 클라이언트로 보낼 데이터 포맷팅
         const report = jwasuList.map(item => ({
             type: 'jwasu',
             date: item.date,
@@ -511,7 +469,7 @@ app.get('/api/jwasu/table', async (req, res) => {
             managerName: item.managerName || '미지정',
             role: item.role || '-',
             count: item.count || 0,
-            revenue: 0 // 매출은 별도 API(manager-sales)에서 합치므로 여기선 0
+            revenue: 0 
         }));
         
         res.status(200).json({ success: true, report: report });
@@ -523,10 +481,9 @@ app.get('/api/jwasu/table', async (req, res) => {
 });
 
 // ==========================================
-// [섹션 G] 월별 목표 관리 API (팝업용)
+// [섹션 G] 월별 목표 관리 API
 // ==========================================
 
-// [GET] 목표 조회 (기존 유지 - 저장된 joinDate가 있으면 자동으로 가져옵니다)
 app.get('/api/jwasu/admin/monthly-target', async (req, res) => {
     try {
         const { month, storeName, managerName } = req.query;
@@ -537,20 +494,17 @@ app.get('/api/jwasu/admin/monthly-target', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [POST] 목표 설정 (입사일 joinDate 추가)
 app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
     try {
-        // 1. joinDate 추가로 받기
         const { 
             month, storeName, managerName, 
             targetCount, targetMonthlySales, targetWeeklySales, 
             w1, w2, w3, w4, w5, 
-            joinDate // <--- 여기 추가됨
+            joinDate 
         } = req.body;
         
         let weeklySalesData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
 
-        // 주간 데이터 숫자 변환 (기존 로직 유지)
         if (targetWeeklySales && typeof targetWeeklySales === 'object') {
             weeklySalesData.w1 = parseInt(targetWeeklySales.w1) || 0;
             weeklySalesData.w2 = parseInt(targetWeeklySales.w2) || 0;
@@ -572,7 +526,7 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
                     targetCount: parseInt(targetCount) || 0,
                     targetMonthlySales: parseInt(targetMonthlySales) || 0,
                     targetWeeklySales: weeklySalesData,
-                    joinDate: joinDate || null, // <--- 2. DB에 저장 (값이 없으면 null)
+                    joinDate: joinDate || null, 
                     updatedAt: new Date()
                 } 
             },
@@ -595,15 +549,11 @@ app.get('/api/jwasu/admin/managers', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [수정] 매니저 등록 시 중복 체크 강화 (매장+이름+직급)
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { storeName, managerName, role, consignment, targetCount, targetMonthlySales, targetWeeklySales, isActive } = req.body;
         if (!storeName || !managerName) return res.status(400).json({ success: false });
         
-        // ★ [변경] 이름뿐만 아니라 직급(role)까지 포함하여 중복 체크
-        // role이 없는 경우(기존 데이터) 고려하여 $or 조건 또는 기본값 처리 필요하지만, 
-        // 신규 등록이므로 role은 필수값으로 처리하거나 빈 문자열로 처리
         const checkRole = role || '';
 
         const exists = await db.collection(staffCollectionName).findOne({ 
@@ -629,39 +579,24 @@ app.post('/api/jwasu/admin/manager', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-
-
-// [매니저 정보 수정 API] - 메모(memo) 저장 기능 추가
 app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // 1. 프론트엔드에서 보낸 데이터 중 'memo'를 받습니다.
         const { 
-            storeName, 
-            managerName, 
-            role, 
-            consignment, 
-            targetCount, 
-            targetMonthlySales, 
-            targetWeeklySales, 
-            memo // <--- 여기 추가됨
+            storeName, managerName, role, consignment, 
+            targetCount, targetMonthlySales, targetWeeklySales, 
+            memo 
         } = req.body;
 
         await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
             { 
                 $set: { 
-                    storeName, 
-                    managerName, 
-                    role, 
-                    consignment, 
+                    storeName, managerName, role, consignment, 
                     targetCount: parseInt(targetCount) || 0, 
                     targetMonthlySales: parseInt(targetMonthlySales) || 0, 
                     targetWeeklySales: parseInt(targetWeeklySales) || 0,
-                    
-                    memo: memo, // <--- 2. DB에 메모 내용을 저장합니다.
-                    
+                    memo: memo, 
                     updatedAt: new Date() 
                 } 
             }
@@ -673,10 +608,6 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
     }
 });
 
-
-
-
-
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
@@ -685,16 +616,13 @@ app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false }); }
 });
-// [매니저 삭제 API]
+
 app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // ID 유효성 검사
         if (!ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "유효하지 않은 ID입니다." });
         }
-
         const result = await db.collection(staffCollectionName).deleteOne({ _id: new ObjectId(id) });
         
         if (result.deletedCount === 1) {
@@ -708,8 +636,7 @@ app.delete('/api/jwasu/admin/manager/:id', async (req, res) => {
     }
 });
 
-
-// [섹션 - 기타 통계] - my-stats 추가
+// [섹션 - 기타 통계] - my-stats
 app.get('/api/jwasu/my-stats', async (req, res) => {
     try {
         const { storeName, managerName } = req.query;
@@ -729,7 +656,7 @@ app.get('/api/jwasu/my-stats', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [섹션 - 월별 히스토리] - monthly-history 추가
+// [섹션 - 월별 히스토리] - monthly-history
 app.get('/api/jwasu/monthly-history', async (req, res) => {
     try {
         const { month } = req.query;
@@ -759,7 +686,7 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [섹션 F] 기존 좌수 엑셀 업로드 (이름 기준)
+// [섹션 F] 기존 좌수 엑셀 업로드
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
@@ -833,23 +760,16 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
 });
 
 
-// ==========================================
-// [섹션 H] 매니저 매출 관리 (New Feature)
-// * 컬렉션: manager_salesNew
-// * 기능: 엑셀 업로드 및 조회
-// ==========================================
-
-// [GET] 매니저 매출 데이터 조회
+// [섹션 H] 매니저 매출 관리
 app.get('/api/manager-sales', async (req, res) => {
     try {
-        const { date, storeName } = req.query; // 필터 옵션
+        const { date, storeName } = req.query; 
         const query = {};
         
-        if (date) query.date = date; // 'YYYY-MM-DD' 형식
+        if (date) query.date = date; 
         if (storeName) query.storeName = storeName;
 
         const collection = db.collection(managerSalesCollection);
-        // 날짜 내림차순, 매장명 오름차순 정렬
         const results = await collection.find(query).sort({ date: -1, storeName: 1 }).toArray();
 
         res.json({ success: true, data: results });
@@ -859,7 +779,6 @@ app.get('/api/manager-sales', async (req, res) => {
     }
 });
 
-// [POST] 매니저 매출 엑셀 업로드
 app.post('/api/manager-sales/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
@@ -872,12 +791,11 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
         const bulkOps = [];
 
         data.forEach(item => {
-            const dateStr = item.date; // 엑셀에서 파싱된 'YYYY-MM-DD'
+            const dateStr = item.date; 
             const storeName = String(item.storeName || '').trim();
             const managerName = String(item.managerName || '미지정').trim();
             const salesAmount = parseInt(item.salesAmount) || 0; 
             
-            // 필수 키가 있을 경우에만 업데이트
             if (dateStr && storeName) {
                 bulkOps.push({
                     updateOne: {
@@ -895,7 +813,7 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
                                 role: ''
                             }
                         },
-                        upsert: true // 데이터가 없으면 insert, 있으면 update
+                        upsert: true 
                     }
                 });
             }
@@ -913,9 +831,8 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
     }
 });
 
-//해당 위치부터 오프라인 주문서 section입니다.
 // ==========================================
-// [API] Cafe24 상품 검색 (강제 옵션 추출 & 디버깅 모드)
+// [API] Cafe24 상품 검색 (기존 유지)
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -945,24 +862,19 @@ app.get('/api/cafe24/products', async (req, res) => {
 
         const products = response.products;
 
-        // 3. 데이터 정제 (디버깅 로그 포함 + 조건 완화)
+        // 3. 데이터 정제
         const cleanData = products.map(item => {
             let myOptions = [];
             let rawOptionList = [];
 
-            // [진단] 터미널에 원본 데이터 구조를 출력 (문제 해결의 열쇠!)
-            // console.log(`[DEBUG] ${item.product_name} 원본 options:`, JSON.stringify(item.options));
-
-            // 1. 배열 위치 찾기 (구조가 제각각일 수 있음)
             if (item.options) {
                 if (Array.isArray(item.options)) {
-                    rawOptionList = item.options; // 바로 배열인 경우
+                    rawOptionList = item.options; 
                 } else if (item.options.options && Array.isArray(item.options.options)) {
-                    rawOptionList = item.options.options; // options 안에 options가 있는 경우
+                    rawOptionList = item.options.options; 
                 }
             }
 
-            // 2. [수정] has_option === 'T' 조건 제거 (데이터가 있으면 무조건 처리)
             if (rawOptionList.length > 0) {
                 
                 // (A) '색상/Color/컬러' 이름이 있는 옵션을 찾음
@@ -971,7 +883,7 @@ app.get('/api/cafe24/products', async (req, res) => {
                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
                 });
 
-                // (B) 못 찾았으면, 그냥 첫 번째 옵션을 사용 (옵션이 하나라도 있으면 가져오기 위함)
+                // (B) 못 찾았으면, 그냥 첫 번째 옵션을 사용
                 if (!targetOption && rawOptionList.length > 0) {
                     targetOption = rawOptionList[0];
                 }
@@ -979,16 +891,15 @@ app.get('/api/cafe24/products', async (req, res) => {
                 // (C) 값 추출
                 if (targetOption && targetOption.option_value) {
                     myOptions = targetOption.option_value.map(val => ({
-                        option_code: val.value_no || val.value_code || val.value, // 있는 값 아무거나 사용
-                        option_name: val.value_name || val.option_text || val.name // 있는 이름 아무거나 사용
+                        option_code: val.value_no || val.value_code || val.value, 
+                        option_name: val.value_name || val.option_text || val.name 
                     }));
                 }
             }
 
-            // 옵션이 비어있다면 로그를 남겨서 확인
+            // 옵션이 비어있다면 로그
             if (myOptions.length === 0 && item.has_option === 'T') {
                 console.log(`⚠️ [옵션추출실패] 상품명: ${item.product_name}, 구조확인필요`);
-                console.log('   -> 원본데이터:', JSON.stringify(item.options));
             }
 
             return {
@@ -1008,13 +919,11 @@ app.get('/api/cafe24/products', async (req, res) => {
     }
 });
 
+// ==========================================
+// ★ [NEW] 오프라인 주문 API (MongoDB 연동)
+// ==========================================
 
-// ==========================================
-// [API] 주문 완료 및 DB 저장
-// ==========================================
-// ==========================================
-// [API] 주문 완료 및 DB 저장 (배송비 추가됨)
-// ==========================================
+// 1. 주문 완료 (POST) - DB 저장
 app.post('/api/orders', async (req, res) => {
     try {
         console.log('[API] 주문 요청 수신:', JSON.stringify(req.body, null, 2));
@@ -1030,7 +939,7 @@ app.post('/api/orders', async (req, res) => {
             customer_phone,
             address,
             manager_name,
-            shipping_cost // ★ [NEW] 프론트에서 보낸 배송비 받기
+            shipping_cost
         } = req.body;
 
         // 필수 데이터 검증
@@ -1038,42 +947,51 @@ app.post('/api/orders', async (req, res) => {
             return res.status(400).json({ success: false, message: '필수 정보 누락' });
         }
 
-        // 3. DB 저장 (shipping_cost 컬럼 추가)
-        // ※ DB 테이블에도 'shipping_cost' 컬럼을 미리 추가해두셔야 에러가 안 납니다!
-        const sql = `
-            INSERT INTO orders (
-                product_no, product_name, option_name, 
-                price, quantity, shipping_cost, total_amount, 
-                customer_name, customer_phone, address, 
-                manager_name, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        `;
-
-        const values = [
+        // MongoDB에 저장할 데이터 객체 생성
+        const orderData = {
             product_no,
             product_name,
-            selected_option || '단일옵션',
-            price,
-            quantity,
-            shipping_cost || 0, // 배송비 (없으면 0원)
-            total_price,        // 총 결제 금액
+            option_name: selected_option || '단일옵션',
+            price: Number(price) || 0,
+            quantity: Number(quantity) || 1,
+            shipping_cost: Number(shipping_cost) || 0,
+            total_amount: Number(total_price) || 0,
             customer_name,
             customer_phone,
             address,
-            manager_name
-        ];
+            manager_name,
+            created_at: new Date() // 날짜는 Date 객체로 저장
+        };
 
-        // DB 쿼리 실행 (주석 해제 후 사용)
-        // await db.query(sql, values);
-        
-        console.log('[DB] 저장 쿼리:', sql);
-        console.log('[DB] 저장 값:', values);
+        // DB 컬렉션에 삽입 (collectionName: offline_orders)
+        const collection = db.collection(orderCollectionName);
+        const result = await collection.insertOne(orderData);
 
-        res.json({ success: true, message: '주문이 등록되었습니다.' });
+        console.log('[DB] 주문 저장 완료. ID:', result.insertedId);
+
+        res.json({ success: true, message: '주문이 등록되었습니다.', orderId: result.insertedId });
 
     } catch (error) {
         console.error('[에러] 주문 저장 실패:', error);
         res.status(500).json({ success: false, message: '서버 에러 발생', error: error.message });
+    }
+});
+
+// 2. 주문 목록 조회 (GET) - 팝업용
+app.get('/api/orders', async (req, res) => {
+    try {
+        const collection = db.collection(orderCollectionName);
+        // 최근 주문 50개 조회 (최신순)
+        const orders = await collection.find({})
+            .sort({ created_at: -1 })
+            .limit(50)
+            .toArray();
+
+        res.json({ success: true, data: orders });
+
+    } catch (error) {
+        console.error('[에러] 주문 목록 조회 실패:', error);
+        res.status(500).json({ success: false, message: '조회 실패' });
     }
 });
 
