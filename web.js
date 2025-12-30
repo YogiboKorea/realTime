@@ -913,7 +913,7 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 //해당 위치부터 오프라인 주문서 section입니다.
 // ==========================================
-// [API] Cafe24 상품 검색 (강제 옵션 추출 & 디버깅 모드)
+// [API] Cafe24 상품 검색 (오래된 순 정렬 - 최종 수정)
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -923,7 +923,7 @@ app.get('/api/cafe24/products', async (req, res) => {
             return res.json({ success: true, count: 0, data: [] });
         }
 
-        console.log(`[Cafe24] 검색 시작: "${keyword}"`);
+        console.log(`[Cafe24] 검색 요청: "${keyword}" (오래된 순)`);
 
         // 1. Cafe24 API 호출
         const response = await apiRequest(
@@ -932,61 +932,53 @@ app.get('/api/cafe24/products', async (req, res) => {
             null,
             {
                 'shop_no': 1,
-                'product_name': keyword,
-                'display': 'T',
-                'selling': 'T',
-                'embed': 'options',      // ★ 옵션 포함 요청
+                'product_name': keyword, // 상품명 검색
+                'display': 'T',          // 진열 상태 (안 나오면 이 줄을 주석 처리해보세요)
+                'selling': 'T',          // 판매 상태 (안 나오면 이 줄을 주석 처리해보세요)
+                'embed': 'options',      // 옵션 정보 포함
                 'fields': 'product_no,product_name,price,product_code,has_option,options',
-                'limit': 50
+                'limit': 50,
+                
+                // ★ 핵심 수정: 정확한 정렬 파라미터 값 사용
+                // regist_date_asc  : 등록일 오름차순 (예전 상품 먼저)
+                // regist_date_desc : 등록일 내림차순 (최신 상품 먼저 - 기본값)
+                'order': 'regist_date_asc' 
             }
         );
 
         const products = response.products;
 
-        // 3. 데이터 정제 (디버깅 로그 포함 + 조건 완화)
+        // 2. 데이터 정제 (옵션 추출 로직 - 유지)
         const cleanData = products.map(item => {
             let myOptions = [];
             let rawOptionList = [];
 
-            // [진단] 터미널에 원본 데이터 구조를 출력 (문제 해결의 열쇠!)
-            // console.log(`[DEBUG] ${item.product_name} 원본 options:`, JSON.stringify(item.options));
-
-            // 1. 배열 위치 찾기 (구조가 제각각일 수 있음)
             if (item.options) {
                 if (Array.isArray(item.options)) {
-                    rawOptionList = item.options; // 바로 배열인 경우
+                    rawOptionList = item.options;
                 } else if (item.options.options && Array.isArray(item.options.options)) {
-                    rawOptionList = item.options.options; // options 안에 options가 있는 경우
+                    rawOptionList = item.options.options;
                 }
             }
 
-            // 2. [수정] has_option === 'T' 조건 제거 (데이터가 있으면 무조건 처리)
             if (rawOptionList.length > 0) {
-                
-                // (A) '색상/Color/컬러' 이름이 있는 옵션을 찾음
+                // '색상' 관련 옵션 찾기
                 let targetOption = rawOptionList.find(opt => {
                     const name = (opt.option_name || "").toLowerCase();
                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
                 });
 
-                // (B) 못 찾았으면, 그냥 첫 번째 옵션을 사용 (옵션이 하나라도 있으면 가져오기 위함)
+                // 없으면 첫 번째 옵션 사용
                 if (!targetOption && rawOptionList.length > 0) {
                     targetOption = rawOptionList[0];
                 }
 
-                // (C) 값 추출
                 if (targetOption && targetOption.option_value) {
                     myOptions = targetOption.option_value.map(val => ({
-                        option_code: val.value_no || val.value_code || val.value, // 있는 값 아무거나 사용
-                        option_name: val.value_name || val.option_text || val.name // 있는 이름 아무거나 사용
+                        option_code: val.value_no || val.value_code || val.value,
+                        option_name: val.value_name || val.option_text || val.name
                     }));
                 }
-            }
-
-            // 옵션이 비어있다면 로그를 남겨서 확인
-            if (myOptions.length === 0 && item.has_option === 'T') {
-                console.log(`⚠️ [옵션추출실패] 상품명: ${item.product_name}, 구조확인필요`);
-                console.log('   -> 원본데이터:', JSON.stringify(item.options));
             }
 
             return {
@@ -1001,11 +993,16 @@ app.get('/api/cafe24/products', async (req, res) => {
         res.json({ success: true, count: cleanData.length, data: cleanData });
 
     } catch (error) {
-        console.error('[Cafe24] API 오류:', error.response ? error.response.data : error.message);
+        console.error('🔴 [Cafe24 API 오류]');
+        if (error.response) {
+            console.error('Status:', error.response.status);
+            console.error('Msg:', JSON.stringify(error.response.data));
+        } else {
+            console.error('Error:', error.message);
+        }
         res.status(500).json({ success: false, message: '서버 오류 발생' });
     }
 });
-
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
