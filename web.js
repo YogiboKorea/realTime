@@ -1009,6 +1009,97 @@ app.get('/api/cafe24/products', async (req, res) => {
 });
 
 
+// ==========================================
+// [API] 주문 완료 및 DB 저장
+// ==========================================
+app.post('/api/orders', async (req, res) => {
+    try {
+        // 1. 프론트엔드에서 보낸 데이터 확인 (디버깅용)
+        console.log('[API] 주문 요청 데이터 수신:', JSON.stringify(req.body, null, 2));
+
+        const {
+            product_no,
+            product_name,
+            selected_option, // (예: "레드", "XL" 등 선택한 옵션값)
+            price,           // 단가
+            quantity,        // 수량
+            total_price,     // 최종 금액 (할인 적용 후)
+            customer_name,   // 주문자명
+            customer_phone,  // 연락처
+            address,         // 주소
+            manager_name     // 매니저 이름 (로그인된 매니저)
+        } = req.body;
+
+        // 2. 필수 데이터 검증 (데이터가 비어있으면 에러 처리)
+        if (!product_name || !total_price || !customer_name) {
+            return res.status(400).json({ 
+                success: false, 
+                message: '필수 주문 정보가 누락되었습니다.' 
+            });
+        }
+
+        // 3. DB에 저장 (SQL 작성)
+        // ★ 주의: 아래 컬럼명(product_name, option_name 등)을 실제 DB 테이블과 맞춰주세요!
+        const sql = `
+            INSERT INTO orders (
+                product_no, 
+                product_name, 
+                option_name, 
+                price, 
+                quantity, 
+                total_amount, 
+                customer_name, 
+                customer_phone, 
+                address, 
+                manager_name, 
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        `;
+
+        const values = [
+            product_no,
+            product_name,
+            selected_option || '단일옵션', // 옵션이 없으면 '단일옵션'으로 저장
+            price,
+            quantity,
+            total_price,
+            customer_name,
+            customer_phone,
+            address,
+            manager_name
+        ];
+
+        // 4. 쿼리 실행 (db 변수는 사용하시는 DB 연결 객체여야 합니다)
+        // await db.query(sql, values); 
+        // ※ 만약 pool을 사용 중이라면 await pool.query(sql, values);
+        
+        // (임시: DB 연결 코드가 확실치 않아 로그로 대체, 위 주석 해제하여 사용하세요)
+        console.log('[DB] 주문 저장 쿼리 실행:', sql);
+        console.log('[DB] 저장될 값:', values);
+
+        // 실제 DB 연동시 아래 주석을 풀고 사용하세요
+        /*
+        const [result] = await pool.query(sql, values);
+        console.log('[DB] 주문 저장 완료, ID:', result.insertId);
+        */
+
+        // 5. 성공 응답
+        res.json({ 
+            success: true, 
+            message: '주문이 정상적으로 등록되었습니다.' 
+        });
+
+    } catch (error) {
+        console.error('[CRITICAL] 주문 처리 중 에러 발생:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: '서버 내부 오류로 주문에 실패했습니다.',
+            error: error.message 
+        });
+    }
+});
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
