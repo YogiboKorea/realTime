@@ -41,55 +41,7 @@ const mongoClient = new MongoClient(mongoUri, {
 });
 let db; // 전역 DB 객체
 
-// FTP 및 Multer 관련
-const ftpConfig = {
-    host: process.env.FTP_HOST,
-    user: process.env.FTP_USER,
-    password: process.env.FTP_PASSWORD,
-};
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
-const ftpClient = new ftp();
 
-// --- 4. 미들웨어 설정 ---
-app.use(express.json({ limit: '50mb' })); // 용량 제한 설정
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use(cors({
-    origin: '*', // CORS 설정
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-}));
-
-// --- 5. FTP 업로드 함수 ---
-const uploadToFTP = (fileBuffer, remotePath) => {
-    return new Promise((resolve, reject) => {
-        const client = new ftp(); // 새 클라이언트 인스턴스 생성
-        client.on('ready', () => {
-            console.log('FTP 연결 성공');
-            client.put(fileBuffer, remotePath, (err) => {
-                if (err) {
-                    console.error('FTP 업로드 오류:', err);
-                    reject('FTP 업로드 오류: ' + err.message);
-                } else {
-                    console.log('FTP 업로드 성공:', remotePath);
-                    resolve('FTP 업로드 성공');
-                }
-                client.end();
-            });
-        });
-        client.on('error', (err) => {
-            console.error('FTP 연결 오류:', err);
-            reject('FTP 연결 오류: ' + err.message);
-        });
-        client.on('close', (hadError) => {
-            if (hadError) console.error('FTP 비정상적 종료');
-            // console.log('FTP 연결 종료');
-        });
-        client.connect(ftpConfig);
-    });
-};
-
-
-// --- 6. Cafe24 API 및 랭킹 관련 함수 (MongoDB 리팩터링) ---
 
 // MongoDB에서 토큰 읽기 (전역 db 사용)
 async function getTokensFromDB() {
@@ -984,8 +936,6 @@ mongoClient.connect()
                 }
             });
 
-            // 서버 시작 시 랭킹 데이터 1회 초기화
-            await initializeServer();
         });
     })
     .catch(err => {
