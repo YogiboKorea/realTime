@@ -16,8 +16,9 @@ const path = require('path');
 
 // --- 2. Express 앱 및 포트 설정 ---
 const app = express();
-const PORT = 8014; // 8014 포트로 통일
 app.use(cors());
+const PORT = 8014; // 8014 포트로 통일
+
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
