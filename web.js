@@ -910,6 +910,87 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
     }
 });
 
+//해당 위치부터 오프라인 주문서 section입니다.
+
+// ==========================================
+// [섹션 - Cafe24 연동] 상품 정보 가져오기 (하드코딩 제거용)
+// ==========================================
+
+app.get('/api/cafe24/products', async (req, res) => {
+    try {
+        // 1. 요청 파라미터 확인 (카테고리 번호가 없으면 기본값 사용)
+        const targetCategory = req.query.category || CATEGORY_NO;
+        
+        console.log(`[Cafe24] 카테고리(${targetCategory}) 상품 조회 요청`);
+
+        // 2. Cafe24 Admin API 호출 (상품 목록)
+        // fields: 필요한 데이터만 쏙쏙 골라옵니다 (트래픽 절약)
+        // product_no: 고유번호
+        // product_name: 상품명
+        // price: 판매가
+        // product_code: 자체 품목 코드 (이카운트 매핑에 중요 ★)
+        // options: 색상 등 옵션 정보
+        const response = await apiRequest(
+            'GET', 
+            `https://${MALLID}.cafe24api.com/api/v2/admin/products`, 
+            null, 
+            {
+                category: targetCategory,
+                display: 'T', // 진열된 상품만
+                selling: 'T', // 판매중인 상품만
+                limit: 100,   // 최대 100개 (그 이상이면 offset 페이징 필요)
+                fields: 'product_no,product_name,price,product_code,options' 
+            }
+        );
+
+        const products = response.products;
+
+        // 3. 데이터 정제 (프론트엔드나 봇이 쓰기 편하게 변환)
+        const cleanData = products.map(item => {
+            // 옵션 정보 추출 (예: Red, Blue 등)
+            // Cafe24 옵션 구조가 복잡하므로 단순화시킵니다.
+            let optionList = [];
+            if (item.options && item.options.has_option === 'T') {
+                // 옵션이 있는 경우
+                optionList = item.options.options.map(opt => ({
+                    name: opt.option_name, // 예: "색상"
+                    values: opt.option_value.map(val => val.value_name) // 예: ["Red", "Dark Grey"]
+                }));
+            }
+
+            return {
+                no: item.product_no,
+                code: item.product_code, // ★ 핵심: 이 코드를 이카운트와 매핑할 예정
+                name: item.product_name,
+                price: Math.floor(Number(item.price)), // 소수점 제거
+                options: optionList
+            };
+        });
+
+        // 4. (선택사항) DB에 '상품 마스터'로 최신화 저장
+        // 매번 API를 부르지 않고 DB에서 꺼내 쓰려면 주석을 해제하세요.
+        /*
+        const productCollection = db.collection('product_master');
+        if (cleanData.length > 0) {
+            const bulkOps = cleanData.map(prod => ({
+                updateOne: {
+                    filter: { code: prod.code },
+                    update: { $set: prod },
+                    upsert: true
+                }
+            }));
+            await productCollection.bulkWrite(bulkOps);
+        }
+        */
+
+        console.log(`[Cafe24] 상품 ${cleanData.length}건 로드 완료`);
+        res.json({ success: true, count: cleanData.length, data: cleanData });
+
+    } catch (error) {
+        console.error('[Cafe24] 상품 조회 실패:', error.response ? error.response.data : error.message);
+        res.status(500).json({ success: false, message: 'Cafe24 상품 로드 실패' });
+    }
+});
 
 
 // --- 8. 서버 시작 ---
