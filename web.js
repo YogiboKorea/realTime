@@ -914,40 +914,38 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 });
 
 //해당 위치부터 오프라인 주문서 section입니다.
-
-// ==========================================
-// [API] Cafe24 상품 검색 (옵션 자동 감지 강화)
-// ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
         const { keyword } = req.query;
 
-        // 검색어가 없으면 빈 배열 반환 (불필요한 전체 로딩 방지)
+        // 검색어가 없으면 빈 배열 반환
         if (!keyword) {
             return res.json({ success: true, count: 0, data: [] });
         }
 
         console.log(`[Cafe24] 상품 검색 요청: "${keyword}"`);
 
-        // 1. Cafe24 API 호출 (apiRequest 함수 사용으로 토큰 자동 갱신)
+        // 1. Cafe24 API 호출
         const response = await apiRequest(
             'GET',
             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
             null,
             {
                 'shop_no': 1,
-                'product_name': keyword, // 검색어
-                'display': 'T',          // 진열된 상품만
-                'selling': 'T',          // 판매중인 상품만
-                'embed': 'options',      // ★ 핵심: 옵션 상세 정보 포함
+                'product_name': keyword,
+                'display': 'T',
+                'selling': 'T',
+                'embed': 'options',
                 'fields': 'product_no,product_name,price,product_code,has_option,options',
                 'limit': 50
             }
         );
 
+        // ▼ [수정됨] API 응답에서 실제 상품 목록(배열) 꺼내기
+        // (apiRequest 함수가 response.data를 리턴한다고 가정. 만약 axios response 통째라면 response.data.products)
+        const products = response.products || []; 
 
-
-        // 3. 데이터 정제 (옵션 추출 로직 강화)
+        // 2. 데이터 정제 (옵션 추출 로직)
         const cleanData = products.map(item => {
             let myOptions = [];
 
@@ -956,19 +954,19 @@ app.get('/api/cafe24/products', async (req, res) => {
             
             if (item.options) {
                 if (Array.isArray(item.options)) {
-                    // Case A: options가 바로 배열인 경우 (일부 구형 상품 등)
+                    // Case A: options가 바로 배열인 경우
                     rawOptionList = item.options;
                 } else if (item.options.options && Array.isArray(item.options.options)) {
-                    // Case B: options 객체 안에 options 배열이 있는 경우 (최신 표준)
+                    // Case B: options 객체 안에 options 배열이 있는 경우 (embed 사용 시 주로 이 형태)
                     rawOptionList = item.options.options;
                 }
             }
 
-            // 2. 옵션이 존재하면 파싱 시작
+            // 옵션이 존재하면 파싱 시작
             if (item.has_option === 'T' && rawOptionList.length > 0) {
                 
-                // '색상', 'Color', '컬러'라는 단어가 들어간 옵션을 우선 찾음
-                // 만약 못 찾으면 무조건 첫 번째(0번) 옵션을 가져옴 (사이즈만 있거나 다른 이름일 경우 대비)
+                // '색상', 'Color', '컬러' 또는 '사이즈' 등 원하는 옵션명 필터링
+                // (못 찾으면 첫 번째 옵션을 사용하도록 fallback 처리 됨)
                 const targetOption = rawOptionList.find(opt => 
                     opt.option_name.includes('색상') || 
                     opt.option_name.includes('Color') ||
@@ -977,8 +975,8 @@ app.get('/api/cafe24/products', async (req, res) => {
 
                 if (targetOption && targetOption.option_value) {
                     myOptions = targetOption.option_value.map(val => ({
-                        option_code: val.value_no || val.value_code, // 코드값 안전하게 가져오기
-                        option_name: val.value_name || val.option_text // 이름값 안전하게 가져오기
+                        option_code: val.value_no || val.value_code, 
+                        option_name: val.value_name || val.option_text 
                     }));
                 }
             }
@@ -995,8 +993,13 @@ app.get('/api/cafe24/products', async (req, res) => {
         res.json({ success: true, count: cleanData.length, data: cleanData });
 
     } catch (error) {
-        console.error('[Cafe24] 상품 검색 실패:', error.response ? error.response.data : error.message);
-        res.status(500).json({ success: false, message: '상품 정보를 가져오는데 실패했습니다.' });
+        // 에러 로그를 좀 더 자세히 찍어서 디버깅 돕기
+        console.error('[Cafe24] 상품 검색 실패:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: '상품 정보를 가져오는데 실패했습니다.',
+            error: error.message // 개발 단계에서만 확인용으로 포함 (배포시 제거 권장)
+        });
     }
 });
 
