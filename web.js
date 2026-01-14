@@ -1391,6 +1391,51 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
+
+
+
+// ==========================================
+// ★ [NEW] 재고 조회 API (yogibo_stock DB 연동)
+// ==========================================
+
+// 재고 전용 DB 및 컬렉션 이름 설정
+const stockDbName = 'yogibo_stock'; 
+const stockCollectionName = 'stocks';
+
+app.get('/api/stock/:category', async (req, res) => {
+    try {
+        const { category } = req.params;
+
+        // 1. 기존 연결(mongoClient)을 이용하되, DB만 'yogibo_stock'으로 스위칭해서 접근
+        const stockDb = mongoClient.db(stockDbName);
+        const collection = stockDb.collection(stockCollectionName);
+
+        let query = {};
+
+        // 2. 카테고리 조건 설정 ('전체'가 아닐 때만 필터링)
+        if (category && category !== '전체') {
+            query.category = category;
+        }
+
+        // 3. DB 조회
+        // _id는 필요 없으니 제외하고(.project({_id:0})), 배열로 변환(.toArray())
+        const data = await collection.find(query)
+            .project({ _id: 0 }) 
+            .toArray();
+
+        // 4. 데이터 반환
+        res.json(data);
+
+    } catch (error) {
+        console.error('🔥 재고 조회 API 오류:', error);
+        res.status(500).json({ error: "재고 데이터를 불러오는 중 서버 오류가 발생했습니다." });
+    }
+});
+
+
+
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
