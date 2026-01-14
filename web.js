@@ -1393,7 +1393,6 @@ app.get('/api/orders', async (req, res) => {
 
 
 
-
 // ==========================================
 // ★ [NEW] 재고 조회 API (yogibo_stock DB 연동)
 // ==========================================
@@ -1418,7 +1417,6 @@ app.get('/api/stock/:category', async (req, res) => {
         }
 
         // 3. DB 조회
-        // _id는 필요 없으니 제외하고(.project({_id:0})), 배열로 변환(.toArray())
         const data = await collection.find(query)
             .project({ _id: 0 }) 
             .toArray();
@@ -1432,54 +1430,59 @@ app.get('/api/stock/:category', async (req, res) => {
     }
 });
 
-
-
-// --- ★ [추가됨] 엑셀 다운로드 API ---
+// ==========================================
+// ★ [수정됨] 엑셀 다운로드 API (오류 수정 완료)
+// ==========================================
 app.get('/api/download/stock', async (req, res) => {
     try {
-        // 1. DB에서 전체 데이터 가져오기
-        const data = await stockCollection.find({}).project({ _id: 0 }).toArray();
+        // 1. DB 및 컬렉션 직접 지정 (전역 변수 stockCollection 의존성 제거)
+        const stockDb = mongoClient.db(stockDbName);
+        const collection = stockDb.collection(stockCollectionName);
 
-        // 2. 엑셀에 들어갈 데이터 포맷으로 변환 (한글 헤더)
-        const excelData = data.map(item => ({
-            '대분류': item.category,
-            '품목코드': item.code,
-            '상품명': item.name,
-            '옵션(컬러)': item.spec,
-            '재고수량': item.qty,
-        }));
+        // 2. DB에서 전체 데이터 가져오기
+        const data = await collection.find({}).project({ _id: 0 }).toArray();
 
-        // 3. 워크북 및 시트 생성
-        const workBook = xlsx.utils.book_new();
-        const workSheet = xlsx.utils.json_to_sheet(excelData);
+        // 3. 엑셀 생성 (ExcelJS)
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('재고리스트');
 
-        // 컬럼 너비 설정 (보기 좋게)
-        workSheet['!cols'] = [
-            { wch: 10 }, // 대분류
-            { wch: 15 }, // 품목코드
-            { wch: 30 }, // 상품명
-            { wch: 20 }, // 옵션
-            { wch: 10 }, // 재고
-            { wch: 20 }  // 시간
+        // 4. 헤더 설정 (컬럼 너비 지정)
+        worksheet.columns = [
+            { header: '분류', key: 'category', width: 10 },
+            { header: '품목코드', key: 'code', width: 15 },
+            { header: '상품명', key: 'name', width: 30 },
+            { header: '옵션(컬러)', key: 'spec', width: 20 },
+            { header: '재고수량', key: 'qty', width: 10 },
+            { header: '업데이트시간', key: 'updatedAt', width: 20 }
         ];
 
-        xlsx.utils.book_append_sheet(workBook, workSheet, '재고리스트');
+        // 5. 데이터 가공 및 추가
+        data.forEach(item => {
+            worksheet.addRow({
+                category: item.category,
+                code: item.code,
+                name: item.name,
+                spec: item.spec,
+                qty: item.qty,
+                // 날짜 포맷팅 (updatedAt이 있을 경우만 변환)
+                updatedAt: item.updatedAt ? moment(item.updatedAt).tz('Asia/Seoul').format('YYYY-MM-DD HH:mm:ss') : ''
+            });
+        });
 
-        // 4. 버퍼로 변환 후 전송
-        const excelBuffer = xlsx.write(workBook, { bookType: 'xlsx', type: 'buffer' });
+        // 6. 파일명 생성 및 전송
+        const fileName = `Stock_List_${moment().tz('Asia/Seoul').format('YYYYMMDD_HHmmss')}.xlsx`;
 
-        const fileName = `Stock_List_${new Date().toISOString().slice(0,10)}.xlsx`;
-
-        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.send(excelBuffer);
+        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+
+        await workbook.xlsx.write(res);
+        res.end();
 
     } catch (error) {
         console.error("🔥 엑셀 다운로드 오류:", error);
         res.status(500).send("엑셀 다운로드 중 오류가 발생했습니다.");
     }
 });
-
 
 // --- 8. 서버 시작 ---
 mongoClient.connect()
