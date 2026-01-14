@@ -1429,13 +1429,12 @@ app.get('/api/stock/:category', async (req, res) => {
         res.status(500).json({ error: "재고 데이터를 불러오는 중 서버 오류가 발생했습니다." });
     }
 });
-
 // ==========================================
-// ★ [수정됨] 엑셀 다운로드 API (오류 수정 완료)
+// ★ [수정됨] 엑셀 다운로드 API (업데이트 시간 제거, 날짜 파일명)
 // ==========================================
 app.get('/api/download/stock', async (req, res) => {
     try {
-        // 1. DB 및 컬렉션 직접 지정 (전역 변수 stockCollection 의존성 제거)
+        // 1. DB 및 컬렉션 직접 지정
         const stockDb = mongoClient.db(stockDbName);
         const collection = stockDb.collection(stockCollectionName);
 
@@ -1446,14 +1445,13 @@ app.get('/api/download/stock', async (req, res) => {
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('재고리스트');
 
-        // 4. 헤더 설정 (컬럼 너비 지정)
+        // 4. 헤더 설정 (업데이트 시간 제거함)
         worksheet.columns = [
             { header: '분류', key: 'category', width: 10 },
             { header: '품목코드', key: 'code', width: 15 },
             { header: '상품명', key: 'name', width: 30 },
             { header: '옵션(컬러)', key: 'spec', width: 20 },
             { header: '재고수량', key: 'qty', width: 10 },
-            { header: '업데이트시간', key: 'updatedAt', width: 20 }
         ];
 
         // 5. 데이터 가공 및 추가
@@ -1463,17 +1461,18 @@ app.get('/api/download/stock', async (req, res) => {
                 code: item.code,
                 name: item.name,
                 spec: item.spec,
-                qty: item.qty,
-                // 날짜 포맷팅 (updatedAt이 있을 경우만 변환)
-                updatedAt: item.updatedAt ? moment(item.updatedAt).tz('Asia/Seoul').format('YYYY-MM-DD HH:mm:ss') : ''
+                qty: item.qty
+                // updatedAt 제거됨
             });
         });
 
-        // 6. 파일명 생성 및 전송
-        const fileName = `Stock_List_${moment().tz('Asia/Seoul').format('YYYYMMDD_HHmmss')}.xlsx`;
+        // 6. 파일명 생성 (예: Stock_List_2026-01-14.xlsx)
+        const fileName = `Stock_List_${moment().tz('Asia/Seoul').format('YYYY-MM-DD')}.xlsx`;
 
+        // 7. 헤더 설정 및 전송
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+        // 파일명 인코딩 (한글이나 특수문자 깨짐 방지용 안전장치 포함)
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
         await workbook.xlsx.write(res);
         res.end();
@@ -1483,7 +1482,6 @@ app.get('/api/download/stock', async (req, res) => {
         res.status(500).send("엑셀 다운로드 중 오류가 발생했습니다.");
     }
 });
-
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
