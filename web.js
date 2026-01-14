@@ -1434,6 +1434,51 @@ app.get('/api/stock/:category', async (req, res) => {
 
 
 
+// --- ★ [추가됨] 엑셀 다운로드 API ---
+app.get('/api/download/stock', async (req, res) => {
+    try {
+        // 1. DB에서 전체 데이터 가져오기
+        const data = await stockCollection.find({}).project({ _id: 0 }).toArray();
+
+        // 2. 엑셀에 들어갈 데이터 포맷으로 변환 (한글 헤더)
+        const excelData = data.map(item => ({
+            '대분류': item.category,
+            '품목코드': item.code,
+            '상품명': item.name,
+            '옵션(컬러)': item.spec,
+            '재고수량': item.qty,
+        }));
+
+        // 3. 워크북 및 시트 생성
+        const workBook = xlsx.utils.book_new();
+        const workSheet = xlsx.utils.json_to_sheet(excelData);
+
+        // 컬럼 너비 설정 (보기 좋게)
+        workSheet['!cols'] = [
+            { wch: 10 }, // 대분류
+            { wch: 15 }, // 품목코드
+            { wch: 30 }, // 상품명
+            { wch: 20 }, // 옵션
+            { wch: 10 }, // 재고
+            { wch: 20 }  // 시간
+        ];
+
+        xlsx.utils.book_append_sheet(workBook, workSheet, '재고리스트');
+
+        // 4. 버퍼로 변환 후 전송
+        const excelBuffer = xlsx.write(workBook, { bookType: 'xlsx', type: 'buffer' });
+
+        const fileName = `Stock_List_${new Date().toISOString().slice(0,10)}.xlsx`;
+
+        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(excelBuffer);
+
+    } catch (error) {
+        console.error("🔥 엑셀 다운로드 오류:", error);
+        res.status(500).send("엑셀 다운로드 중 오류가 발생했습니다.");
+    }
+});
 
 
 // --- 8. 서버 시작 ---
