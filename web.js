@@ -243,6 +243,78 @@ app.post('/api/jwasu/increment', async (req, res) => {
     }
 });
 
+// 1-1. [POST] 좌수 수동 입력 추가 (한 번에 여러 개 추가) 중복입력지정
+app.post('/api/jwasu/add', async (req, res) => {
+    try {
+        const { storeName, managerName, count } = req.body;
+        const mgrName = managerName || '미지정';
+        
+        // 입력된 값이 숫자가 아니거나 0보다 작으면 에러 처리
+        const addAmount = parseInt(count);
+        if (isNaN(addAmount) || addAmount <= 0) {
+            return res.status(400).json({ success: false, message: '유효한 숫자가 아닙니다.' });
+        }
+
+        const now = moment().tz('Asia/Seoul');
+        const todayStr = now.format('YYYY-MM-DD');
+        const startOfMonth = now.startOf('month').format('YYYY-MM-DD');
+        const currentMonthStr = now.format('YYYY-MM');
+
+        const collection = db.collection(jwasuCollectionName);
+        const staffCollection = db.collection(staffCollectionName);
+        const targetCollection = db.collection(monthlyTargetCollection);
+
+        // --- (여기부터는 increment와 동일: 매니저 정보 및 목표 최신화) ---
+        // 기본 정보 조회
+        const staffInfo = await staffCollection.findOne({ storeName: storeName, managerName: mgrName });
+        
+        // 이번 달 설정된 목표 조회
+        const monthlyTarget = await targetCollection.findOne({ month: currentMonthStr, storeName: storeName, managerName: mgrName });
+
+        // 목표 결정 로직
+        const finalTargetCount = (monthlyTarget && monthlyTarget.targetCount > 0) ? monthlyTarget.targetCount : (staffInfo ? staffInfo.targetCount : 0);
+        const finalMonthlySales = (monthlyTarget && monthlyTarget.targetMonthlySales > 0) ? monthlyTarget.targetMonthlySales : (staffInfo ? staffInfo.targetMonthlySales : 0);
+        const finalWeeklySales = (monthlyTarget && monthlyTarget.targetWeeklySales) ? monthlyTarget.targetWeeklySales : (staffInfo ? staffInfo.targetWeeklySales : 0);
+        // ----------------------------------------------------------------
+
+        const updateData = {
+            $inc: { count: addAmount }, // ★ 핵심: 1이 아니라 받아온 숫자만큼 증가
+            $set: { 
+                lastUpdated: new Date(),
+                role: staffInfo ? staffInfo.role : '매니저',
+                consignment: staffInfo ? staffInfo.consignment : 'N',
+                targetCount: finalTargetCount,
+                targetMonthlySales: finalMonthlySales,
+                targetWeeklySales: finalWeeklySales
+            },
+            $setOnInsert: { createdAt: new Date() }
+        };
+
+        const result = await collection.findOneAndUpdate(
+            { date: todayStr, storeName: storeName, managerName: mgrName },
+            updateData,
+            { upsert: true, returnDocument: 'after' }
+        );
+
+        const updatedDoc = result.value || result; 
+        const todayCount = updatedDoc.count;
+
+        // 월 누적 다시 계산
+        const pipeline = [
+            { $match: { storeName: storeName, managerName: mgrName, date: { $gte: startOfMonth, $lte: todayStr } } },
+            { $group: { _id: null, total: { $sum: "$count" } } }
+        ];
+        const aggResult = await collection.aggregate(pipeline).toArray();
+        const monthlyTotal = aggResult.length > 0 ? aggResult[0].total : todayCount;
+
+        res.json({ success: true, storeName, managerName: mgrName, todayCount, monthlyTotal });
+
+    } catch (error) {
+        console.error('좌수 수동 추가 오류:', error);
+        res.status(500).json({ success: false, message: '추가 처리 중 오류 발생' });
+    }
+});
+
 // 2. [POST] 좌수 카운트 취소
 app.post('/api/jwasu/undo', async (req, res) => {
     try {
