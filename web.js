@@ -314,30 +314,51 @@ app.post('/api/jwasu/add', async (req, res) => {
         res.status(500).json({ success: false, message: '추가 처리 중 오류 발생' });
     }
 });
-// [섹션 I] 비교 데이터 조회 (전년/전월 선택 가능하도록 수정)
+// [섹션 I] 전년/전월 대비 데이터 조회 (수정됨: 로그 추가 및 날짜 계산 강화)
 app.get('/api/jwasu/comparison', async (req, res) => {
     try {
-        // type: 'year'(기본값) 또는 'month'
         const { startDate, endDate, storeName, managerName, type } = req.query;
-        if (!startDate || !endDate) return res.status(400).json({ success: false });
+        
+        // 필수 값 체크
+        if (!startDate || !endDate) {
+            return res.status(400).json({ success: false, message: '날짜 정보가 없습니다.' });
+        }
 
+        // 1. 비교 기준 설정 ('month' 아니면 무조건 'year')
         const compareType = type === 'month' ? 'month' : 'year';
+        const subtractAmount = 1;
 
-        // 1. 비교 기간 계산 (전년 or 전월)
-        const lastStart = moment(startDate).subtract(1, compareType).format('YYYY-MM-DD');
-        const lastEnd = moment(endDate).subtract(1, compareType).format('YYYY-MM-DD');
+        // 2. 날짜 계산 (Moment.js 사용)
+        // 현재 조회 중인 날짜
+        const currentStartObj = moment(startDate);
+        const currentEndObj = moment(endDate);
 
-        // 2. 검색 조건 생성
-        let matchQuery = { date: { $gte: lastStart, $lte: lastEnd } };
+        // 과거(비교) 날짜 계산
+        const lastStart = currentStartObj.clone().subtract(subtractAmount, compareType).format('YYYY-MM-DD');
+        const lastEnd = currentEndObj.clone().subtract(subtractAmount, compareType).format('YYYY-MM-DD');
 
-        if (storeName && storeName !== 'all') {
+        // ★ [디버깅 로그] 서버 터미널에서 이 로그를 확인하세요!
+        console.log(`📊 [비교 조회] 기준: ${compareType}`);
+        console.log(`   - 현재: ${startDate} ~ ${endDate}`);
+        console.log(`   - 과거: ${lastStart} ~ ${lastEnd}`);
+        console.log(`   - 매장: ${storeName || '전체'}, 매니저: ${managerName || '전체'}`);
+
+        // 3. 검색 조건 생성 (과거 날짜 기준)
+        let matchQuery = { 
+            date: { $gte: lastStart, $lte: lastEnd } 
+        };
+
+        // 매장 필터 (전체 아닐 때만)
+        if (storeName && storeName !== 'all' && storeName !== 'null') {
             matchQuery.storeName = storeName;
         }
-        if (managerName) {
+        
+        // 매니저 검색
+        if (managerName && managerName !== 'null') {
             matchQuery.managerName = { $regex: managerName, $options: 'i' };
         }
 
-        // 3. 비교 기간 매출 합계
+        // 4. 작년(또는 전월) 매출 합계 조회
         const salesColl = db.collection(managerSalesCollection);
         const salesResult = await salesColl.aggregate([
             { $match: matchQuery },
@@ -345,7 +366,7 @@ app.get('/api/jwasu/comparison', async (req, res) => {
         ]).toArray();
         const lastYearRevenue = salesResult.length > 0 ? salesResult[0].total : 0;
 
-        // 4. 비교 기간 좌수 합계
+        // 5. 작년(또는 전월) 좌수 합계 조회
         const jwasuColl = db.collection(jwasuCollectionName);
         const jwasuResult = await jwasuColl.aggregate([
             { $match: matchQuery },
@@ -358,11 +379,11 @@ app.get('/api/jwasu/comparison', async (req, res) => {
             lastYearRevenue, 
             lastYearCount,
             period: `${lastStart} ~ ${lastEnd}`,
-            type: compareType // 확인용
+            type: compareType
         });
 
     } catch (error) {
-        console.error('비교 데이터 조회 오류:', error);
+        console.error('❌ 비교 데이터 조회 오류:', error);
         res.status(500).json({ success: false });
     }
 });
