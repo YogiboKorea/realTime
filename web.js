@@ -314,30 +314,51 @@ app.post('/api/jwasu/add', async (req, res) => {
         res.status(500).json({ success: false, message: '추가 처리 중 오류 발생' });
     }
 });
-
-// [섹션 I] 전년 대비 매출 데이터 조회 (신장률 계산용)
+// [섹션 I] 전년 대비 데이터 조회 (매장/매니저 필터 적용 수정)
 app.get('/api/jwasu/comparison', async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, storeName, managerName } = req.query;
         if (!startDate || !endDate) return res.status(400).json({ success: false });
 
-        // 1. 작년 기간 계산 (Moment.js 사용 가정)
-        // 문자열 비교를 위해 포맷 통일
+        // 1. 작년 기간 계산
         const lastStart = moment(startDate).subtract(1, 'year').format('YYYY-MM-DD');
         const lastEnd = moment(endDate).subtract(1, 'year').format('YYYY-MM-DD');
 
-        // 2. 작년 매출 합계 조회 (manager_salesNew 컬렉션)
+        // 2. 검색 조건(Query) 생성
+        let matchQuery = { date: { $gte: lastStart, $lte: lastEnd } };
+
+        // 매장 필터 (전체가 아닐 경우)
+        if (storeName && storeName !== 'all') {
+            matchQuery.storeName = storeName;
+        }
+        
+        // 매니저 검색 필터 (이름이 포함되면 검색)
+        if (managerName) {
+            matchQuery.managerName = { $regex: managerName, $options: 'i' };
+        }
+
+        // 3. 작년 매출 합계 조회
         const salesColl = db.collection(managerSalesCollection);
         const salesResult = await salesColl.aggregate([
-            { $match: { date: { $gte: lastStart, $lte: lastEnd } } },
+            { $match: matchQuery },
             { $group: { _id: null, total: { $sum: "$salesAmount" } } }
         ]).toArray();
         
         const lastYearRevenue = salesResult.length > 0 ? salesResult[0].total : 0;
 
+        // 4. 작년 좌수 합계 조회
+        const jwasuColl = db.collection(jwasuCollectionName);
+        const jwasuResult = await jwasuColl.aggregate([
+            { $match: matchQuery },
+            { $group: { _id: null, total: { $sum: "$count" } } }
+        ]).toArray();
+
+        const lastYearCount = jwasuResult.length > 0 ? jwasuResult[0].total : 0;
+
         res.json({ 
             success: true, 
             lastYearRevenue, 
+            lastYearCount,
             period: `${lastStart} ~ ${lastEnd}`
         });
 
