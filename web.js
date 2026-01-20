@@ -12,7 +12,7 @@ require('dotenv').config();
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+
 
 
 // --- 2. Express 앱 및 포트 설정 ---
@@ -319,7 +319,6 @@ app.post('/api/jwasu/add', async (req, res) => {
 // ==========================================
 // [보안] 암호화 설정 (매장 링크용)
 // ==========================================
-const crypto = require('crypto');
 // 32글자 비밀키 (절대 외부에 노출 금지, 서버 재시작시 유지되게 고정값 사용)
 const ENCRYPTION_KEY = '12345678901234567890123456789012'; // 32자여야 함
 const IV_LENGTH = 16; // AES 블록 크기
