@@ -353,7 +353,7 @@ app.get('/api/jwasu/generate-link', (req, res) => {
     
     const token = encrypt(storeName);
     // 실제 서비스 URL에 맞게 수정하세요 (예: https://yoursite.com)
-    const fullLink = `${req.protocol}://${req.get('host')}/off/index.html?code=${token}`;
+    const fullLink = `https://yogibo.kr/off/index.html?code=${token}`;
     
     res.json({ success: true, link: fullLink, token: token });
 });
