@@ -375,10 +375,9 @@ app.get('/api/jwasu/validate-link', (req, res) => {
 // [API] 전체 매장 보안 링크 리스트 반환 (어드민용)
 app.get('/api/jwasu/admin/all-links', async (req, res) => {
     try {
-        // 1. DB에서 고유한 매장명 목록을 가져옵니다.
-        // (사용하시는 DB 구조에 맞춰 collection 이름 확인 필요. 예: salesColl 또는 managersColl)
-        // 여기서는 예시로 salesColl에서 가져온다고 가정합니다.
-        const stores = await salesColl.distinct("storeName"); 
+        // [수정됨] salesColl -> db.collection(managerSalesCollection) 로 변경
+        // managerSalesCollection은 맨 위에서 'manager_salesNew'로 정의되어 있습니다.
+        const stores = await db.collection(managerSalesCollection).distinct("storeName"); 
         
         // 2. 매장명이 유효한 것만 필터링 (null, 빈값 제외)
         const validStores = stores.filter(s => s && s.trim() !== '');
@@ -402,7 +401,6 @@ app.get('/api/jwasu/admin/all-links', async (req, res) => {
         res.status(500).json({ success: false, message: '매장 목록을 불러오지 못했습니다.' });
     }
 });
-
 
 // [섹션 I] 전년/전월 대비 데이터 조회 (수정됨: 로그 추가 및 날짜 계산 강화)
 app.get('/api/jwasu/comparison', async (req, res) => {
