@@ -314,6 +314,64 @@ app.post('/api/jwasu/add', async (req, res) => {
         res.status(500).json({ success: false, message: '추가 처리 중 오류 발생' });
     }
 });
+
+// ==========================================
+// [보안] 암호화 설정 (매장 링크용)
+// ==========================================
+const crypto = require('crypto');
+// 32글자 비밀키 (절대 외부에 노출 금지, 서버 재시작시 유지되게 고정값 사용)
+const ENCRYPTION_KEY = '12345678901234567890123456789012'; // 32자여야 함
+const IV_LENGTH = 16; // AES 블록 크기
+
+function encrypt(text) {
+    let iv = crypto.randomBytes(IV_LENGTH);
+    let cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decrypt(text) {
+    try {
+        let textParts = text.split(':');
+        let iv = Buffer.from(textParts.shift(), 'hex');
+        let encryptedText = Buffer.from(textParts.join(':'), 'hex');
+        let decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+        let decrypted = decipher.update(encryptedText);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        return decrypted.toString();
+    } catch (error) {
+        return null; // 복호화 실패 시 null 반환
+    }
+}
+
+// [API] 매장별 보안 링크 생성 (어드민용)
+// 예: /api/jwasu/generate-link?storeName=스타필드고양
+app.get('/api/jwasu/generate-link', (req, res) => {
+    const { storeName } = req.query;
+    if (!storeName) return res.status(400).json({ success: false });
+    
+    const token = encrypt(storeName);
+    // 실제 서비스 URL에 맞게 수정하세요 (예: https://yoursite.com)
+    const fullLink = `${req.protocol}://${req.get('host')}/off/index.html?code=${token}`;
+    
+    res.json({ success: true, link: fullLink, token: token });
+});
+
+// [API] 보안 토큰 검증 (프론트엔드 접속용)
+app.get('/api/jwasu/validate-link', (req, res) => {
+    const { code } = req.query;
+    if (!code) return res.status(400).json({ success: false });
+
+    const storeName = decrypt(code);
+    if (!storeName) {
+        return res.status(400).json({ success: false, message: '유효하지 않은 링크입니다.' });
+    }
+
+    res.json({ success: true, storeName: storeName });
+});
+
+
 // [섹션 I] 전년/전월 대비 데이터 조회 (수정됨: 로그 추가 및 날짜 계산 강화)
 app.get('/api/jwasu/comparison', async (req, res) => {
     try {
