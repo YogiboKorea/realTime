@@ -387,7 +387,7 @@ app.get('/api/jwasu/admin/all-links', async (req, res) => {
             const token = encrypt(store);
             return {
                 storeName: store,
-                link: `https://yogibo.kr/off/index2.html?code=${token}` // 실제 도메인
+                link: `https://yogibo.kr/off/index.html?code=${token}` // 실제 도메인
             };
         });
 
