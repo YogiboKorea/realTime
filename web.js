@@ -1498,14 +1498,8 @@ app.post('/api/stats', async (req, res) => {
             { upsert: true }
         );
         
-        const stats = await collection.find({}).toArray();
-        const result = {};
-        stats.forEach(doc => {
-            if (!result[doc.week]) result[doc.week] = {};
-            result[doc.week][doc.name] = { hours: doc.hours };
-        });
-
-        res.json({ success: true, stats: result });
+        // 저장 후 데이터 갱신을 위해 다시 조회하지 않고 success만 반환 (프론트에서 reloadAll 호출함)
+        res.json({ success: true });
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false });
@@ -1568,6 +1562,25 @@ app.delete('/api/supporters/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 //응모하기 이벤트 12월05일
@@ -1837,7 +1850,9 @@ app.post('/api/orders', async (req, res) => {
     }
 });
 
-// 2. 주문 목록 조회 (GET) - 팝업용
+
+
+
 // ==========================================
 // [수정] 주문 데이터 + 성장률 통계 조회 API
 // ==========================================
