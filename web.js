@@ -1840,18 +1840,17 @@ app.post('/api/orders', async (req, res) => {
 // 2. 주문 목록 조회 (GET) - 팝업용
 app.get('/api/orders', async (req, res) => {
     try {
-        const collection = db.collection(orderCollectionName);
-        // 최근 주문 50개 조회 (최신순)
-        const orders = await collection.find({})
-            .sort({ created_at: -1 })
-            .limit(50)
-            .toArray();
-
-        res.json({ success: true, data: orders });
-
-    } catch (error) {
-        console.error('[에러] 주문 목록 조회 실패:', error);
-        res.status(500).json({ success: false, message: '조회 실패' });
+        // ★ [핵심] 'off' 데이터베이스를 직접 지정해서 가져오기
+        const dbOff = mongoClient.db('off'); 
+        
+        // 엑셀 동기화된 컬렉션 이름이 'orders' 인지 확인하세요.
+        // 만약 동기화 함수에서 'offline_orders'로 저장했다면 아래 'orders'를 'offline_orders'로 변경해야 합니다.
+        const orders = await dbOff.collection('orders').find({}).toArray();
+        
+        res.json({ success: true, orders });
+    } catch (err) { 
+        console.error(err);
+        res.status(500).json({ success: false, error: err.message }); 
     }
 });
 
