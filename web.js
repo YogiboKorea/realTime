@@ -1474,20 +1474,33 @@ app.get('/api/store-token/:token', async (req, res) => {
     }
 });
 
-// [API] 최신 DB 업데이트 시간 조회 (최종 수정버전)
+// [API] 최신 DB 업데이트 시간 조회 (최종_진짜_최종.js)
 app.get('/api/system/last-update', async (req, res) => {
     try {
-        // [수정] client.db('off') 대신, 이미 연결된 'db' 변수를 바로 사용합니다.
-        // 배치 파일에서도 db.collection('system_metadata')에 저장했으니, 여기서도 똑같이 가져오면 됩니다.
-        const meta = await db.collection('system_metadata').findOne({ key: 'last_update_time' });
-        
+        // 1. 현재 연결된 DB 이름 확인 (콘솔창에서 확인 가능)
+        console.log(`🔎 현재 서버가 보고 있는 DB: ${db.databaseName}`);
+
+        // 2. 일단 현재 DB에서 찾아봅니다.
+        let meta = await db.collection('system_metadata').findOne({ key: 'last_update_time' });
+
+        // 3. 만약 없으면? 'off' DB를 강제로 한 번 더 뒤져봅니다.
+        if (!meta) {
+            console.log("⚠️ 현재 DB에 없음. 'off' DB에서 재검색 시도...");
+            // ★ 핵심: client 변수 대신 db.client를 쓰면 에러가 안 납니다!
+            const dbOff = db.client.db('off'); 
+            meta = await dbOff.collection('system_metadata').findOne({ key: 'last_update_time' });
+        }
+
+        // 4. 결과 반환
         if (meta && meta.timestamp) {
+            console.log("✅ 데이터 찾음:", meta.timestamp);
             res.json({ success: true, timestamp: meta.timestamp });
         } else {
-            res.json({ success: false, message: '기록 없음' });
+            console.log("❌ 어느 DB에도 데이터가 없습니다.");
+            res.json({ success: false, message: '기록 없음', checkedDb: db.databaseName });
         }
     } catch (err) {
-        console.error("시간 조회 에러:", err);
+        console.error("API 에러:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
