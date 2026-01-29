@@ -1563,8 +1563,24 @@ app.delete('/api/supporters/:id', async (req, res) => {
     }
 });
 
-
-
+// ==========================================
+// [추가] 월(Month) 목록 조회 API (필터용)
+// ==========================================
+app.get('/api/months', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off');
+        // orders 컬렉션에서 'month' 필드의 값들만 중복 없이 가져옴 (예: ['2026-01', '2025-12', ...])
+        const months = await dbOff.collection('orders').distinct('month');
+        
+        // 내림차순 정렬 (최신 월이 위로)
+        months.sort().reverse();
+        
+        res.json({ success: true, months });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, months: [] });
+    }
+});
 
 
 
