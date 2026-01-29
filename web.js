@@ -1338,105 +1338,172 @@ app.get('/api/12Event', async (req, res) => {
 
 //MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
 
-
-
 // ==========================================
-// [섹션 - 추가] 오프라인 판매 데이터 조회 API
+// [추가] 게시판 (Messages) API
 // ==========================================
+const messageCollectionName = 'messages'; // 게시판용 컬렉션 이름
 
-// 1. 실시간 판매 내역 및 합계 조회 (리스트용)
-app.get('/api/offline/sales/list', async (req, res) => {
+// 1. 게시글 목록 조회
+app.get('/api/messages', async (req, res) => {
     try {
-        const { startDate, endDate, managerName } = req.query;
-        let query = {};
-
-        // 날짜 필터 (YYYY-MM-DD 문자열을 받아서 Date 객체로 변환)
-        if (startDate && endDate) {
-            const start = moment.tz(startDate, 'Asia/Seoul').startOf('day').toDate();
-            const end = moment.tz(endDate, 'Asia/Seoul').endOf('day').toDate();
-            query.created_at = { $gte: start, $lte: end };
-        }
-
-        // 매니저 필터 (선택 사항)
-        if (managerName && managerName !== 'all') {
-            query.manager_name = managerName;
-        }
-
-        const collection = db.collection(orderCollectionName); // 'offline_orders'
-
-        // 최신순 정렬하여 데이터 가져오기
-        const salesData = await collection.find(query)
-            .sort({ created_at: -1 })
-            .toArray();
-
-        // 요약 정보 계산 (총 매출액, 총 주문건수)
-        const totalRevenue = salesData.reduce((acc, cur) => acc + (cur.total_amount || 0), 0);
-        const totalCount = salesData.length;
-
-        res.json({
-            success: true,
-            summary: {
-                totalRevenue,
-                totalCount
-            },
-            data: salesData
-        });
-
-    } catch (error) {
-        console.error('실시간 판매 조회 오류:', error);
-        res.status(500).json({ success: false, message: '서버 오류 발생' });
+        const collection = db.collection(messageCollectionName);
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
+        // 프론트엔드 호환성을 위해 _id를 id로 변환
+        const result = messages.map(m => ({ ...m, id: m._id }));
+        res.json({ success: true, messages: result });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: '게시글 조회 실패' });
     }
 });
 
-// 2. 주간/월간 일별 매출 통계 조회 (그래프/차트용)
-app.get('/api/offline/sales/stats', async (req, res) => {
+// 2. 게시글 작성
+app.post('/api/messages', async (req, res) => {
     try {
-        const { startDate, endDate, managerName } = req.query;
+        const collection = db.collection(messageCollectionName);
+        const { store, week, manager, title, content, isGlobal, isStoreNotice } = req.body;
         
-        // 날짜 범위 설정 (기본값: 최근 7일)
-        const end = endDate ? moment.tz(endDate, 'Asia/Seoul').endOf('day').toDate() : new Date();
-        const start = startDate ? moment.tz(startDate, 'Asia/Seoul').startOf('day').toDate() : moment().subtract(7, 'days').toDate();
-
-        const matchStage = {
-            created_at: { $gte: start, $lte: end }
+        const newMessage = {
+            store: store || '전체',
+            week: week || '전체',
+            manager: manager || '익명',
+            title,
+            content,
+            isGlobal: !!isGlobal,
+            isStoreNotice: !!isStoreNotice,
+            comments: [],
+            date: moment().tz('Asia/Seoul').format('YYYY-MM-DD'),
+            createdAt: new Date()
         };
 
-        if (managerName && managerName !== 'all') {
-            matchStage.manager_name = managerName;
-        }
-
-        const collection = db.collection(orderCollectionName);
-
-        // MongoDB Aggregation을 사용하여 일별 그룹화 및 합계 계산
-        const stats = await collection.aggregate([
-            { $match: matchStage },
-            {
-                $group: {
-                    _id: { 
-                        $dateToString: { format: "%Y-%m-%d", date: "$created_at", timezone: "Asia/Seoul" } 
-                    },
-                    dailyTotal: { $sum: "$total_amount" }, // 일별 매출 합계
-                    dailyCount: { $sum: 1 }                // 일별 주문 건수
-                }
-            },
-            { $sort: { _id: 1 } } // 날짜 오름차순 정렬
-        ]).toArray();
-
-        // 프론트엔드에서 사용하기 편하게 데이터 포맷팅
-        const formattedData = stats.map(item => ({
-            date: item._id,
-            amount: item.dailyTotal,
-            count: item.dailyCount
-        }));
-
-        res.json({ success: true, data: formattedData });
-
-    } catch (error) {
-        console.error('매출 통계 조회 오류:', error);
-        res.status(500).json({ success: false, message: '통계 조회 오류' });
+        await collection.insertOne(newMessage);
+        
+        // 갱신된 리스트 반환
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: '게시글 저장 실패' });
     }
 });
 
+// 3. 게시글 삭제
+app.delete('/api/messages/:id', async (req, res) => {
+    try {
+        const collection = db.collection(messageCollectionName);
+        const { id } = req.params;
+        
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
+
+        await collection.deleteOne({ _id: new ObjectId(id) });
+        
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// 4. 댓글 작성
+app.post('/api/messages/:id/comments', async (req, res) => {
+    try {
+        const collection = db.collection(messageCollectionName);
+        const { id } = req.params;
+        const { manager, content } = req.body;
+        
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
+
+        const newComment = {
+            id: Date.now(), // 댓글 고유 ID (삭제용)
+            manager, 
+            content, 
+            date: moment().tz('Asia/Seoul').format('YYYY-MM-DD')
+        };
+
+        await collection.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { comments: newComment } }
+        );
+
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// 5. 댓글 삭제
+app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
+    try {
+        const collection = db.collection(messageCollectionName);
+        const { id, cmtId } = req.params;
+        
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
+
+        await collection.updateOne(
+            { _id: new ObjectId(id) },
+            { $pull: { comments: { id: parseInt(cmtId) } } }
+        );
+
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// ==========================================
+// [추가] 근무 시간 (Stats) API
+// ==========================================
+const statsCollectionName = 'work_stats'; // 근무시간용 컬렉션 이름
+
+// 1. 근무시간 조회
+app.get('/api/stats', async (req, res) => {
+    try {
+        const collection = db.collection(statsCollectionName);
+        const stats = await collection.find({}).toArray();
+        
+        // 프론트엔드 포맷으로 변환: result[week][managerName] = { hours: ... }
+        const result = {};
+        stats.forEach(doc => {
+            if (!result[doc.week]) result[doc.week] = {};
+            result[doc.week][doc.name] = { hours: doc.hours };
+        });
+        
+        res.json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false });
+    }
+});
+
+// 2. 근무시간 저장
+app.post('/api/stats', async (req, res) => {
+    try {
+        const collection = db.collection(statsCollectionName);
+        const { week, name, hours } = req.body;
+        
+        // 해당 주차, 해당 매니저의 데이터를 업데이트 (없으면 생성)
+        await collection.updateOne(
+            { week, name },
+            { $set: { hours: Number(hours), updatedAt: new Date() } },
+            { upsert: true }
+        );
+        
+        // 저장된 전체 통계 다시 반환 (선택사항, 여기선 success만 줌)
+        const stats = await collection.find({}).toArray();
+        const result = {};
+        stats.forEach(doc => {
+            if (!result[doc.week]) result[doc.week] = {};
+            result[doc.week][doc.name] = { hours: doc.hours };
+        });
+
+        res.json({ success: true, stats: result });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false });
+    }
+});
 
 
 //응모하기 이벤트 12월05일
