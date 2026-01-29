@@ -1838,22 +1838,78 @@ app.post('/api/orders', async (req, res) => {
 });
 
 // 2. 주문 목록 조회 (GET) - 팝업용
+// ==========================================
+// [수정] 주문 데이터 + 성장률 통계 조회 API
+// ==========================================
 app.get('/api/orders', async (req, res) => {
     try {
-        // ★ [핵심] 'off' 데이터베이스를 직접 지정해서 가져오기
         const dbOff = mongoClient.db('off'); 
+        const { month, store } = req.query; // store 파라미터도 받음
         
-        // 엑셀 동기화된 컬렉션 이름이 'orders' 인지 확인하세요.
-        // 만약 동기화 함수에서 'offline_orders'로 저장했다면 아래 'orders'를 'offline_orders'로 변경해야 합니다.
-        const orders = await dbOff.collection('orders').find({}).toArray();
+        // 1. 기준 월 설정 (없으면 현재 월)
+        const currentMonth = month || moment().tz('Asia/Seoul').format('YYYY-MM');
         
-        res.json({ success: true, orders });
+        // 2. 비교 월 계산 (Moment.js 활용)
+        const currMoment = moment(currentMonth + '-01');
+        const prevMonth = currMoment.clone().subtract(1, 'months').format('YYYY-MM');
+        const prevYear = currMoment.clone().subtract(1, 'years').format('YYYY-MM');
+
+        // 3. 통계용 집계 함수 (빠름)
+        const getMonthlySum = async (targetMonth) => {
+            const query = { date: { $regex: `^${targetMonth}` } };
+            
+            // 매장 필터가 있다면 적용 ('all'이 아닐 때)
+            if (store && store !== 'all') {
+                query.store = store;
+            }
+
+            const result = await dbOff.collection('orders').aggregate([
+                { $match: query },
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]).toArray();
+            
+            return result.length > 0 ? result[0].total : 0;
+        };
+
+        // 4. 병렬로 3가지 합계 계산 (현재, 전월, 전년)
+        const [currSum, prevSum, yearSum] = await Promise.all([
+            getMonthlySum(currentMonth),
+            getMonthlySum(prevMonth),
+            getMonthlySum(prevYear)
+        ]);
+
+        // 5. 상세 목록 조회 (현재 월 데이터만)
+        let listQuery = { date: { $regex: `^${currentMonth}` } };
+        if (store && store !== 'all') listQuery.store = store;
+
+        const projection = {
+            orderNo: 1, date: 1, month: 1, week: 1, 
+            store: 1, manager: 1, category: 1, beadType: 1,
+            productName: 1, color: 1, qty: 1, amount: 1,
+            orderHasSet: 1, orderHasCover: 1
+        };
+
+        const orders = await dbOff.collection('orders')
+            .find(listQuery)
+            .project(projection)
+            .toArray();
+        
+        // 6. 결과 반환 (목록 + 통계)
+        res.json({ 
+            success: true, 
+            orders, 
+            stats: { 
+                current: currSum, 
+                prevMonth: prevSum, 
+                prevYear: yearSum 
+            } 
+        });
+
     } catch (err) { 
         console.error(err);
         res.status(500).json({ success: false, error: err.message }); 
     }
 });
-
 
 
 // ==========================================
