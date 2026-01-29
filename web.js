@@ -155,6 +155,30 @@ const managerSalesCollection = 'manager_salesNew';   // [NEW] 매니저별 매�
 const orderCollectionName = 'offline_orders';     // ★ [NEW] 오프라인 주문 내역 저장용 컬렉션
 
 // ==========================================
+// [API] 매장 목록 동적 조회 (중복 제거)
+// ==========================================
+app.get('/api/jwasu/stores', async (req, res) => {
+    try {
+        // 1. 매니저 정보가 있는 매장들
+        const staffStores = await db.collection(staffCollectionName).distinct('storeName');
+        
+        // 2. 매출 데이터(이카운트)가 있는 매장들
+        const salesStores = await db.collection(managerSalesCollection).distinct('storeName');
+
+        // 3. 두 리스트 합치기 & 중복 제거 & 가나다순 정렬
+        // (Set을 사용하면 중복이 자동으로 사라집니다)
+        const allStores = [...new Set([...staffStores, ...salesStores])]
+                          .filter(s => s && s.trim() !== '') // 빈 값 제외
+                          .sort();
+
+        res.json({ success: true, stores: allStores });
+    } catch (error) {
+        console.error('매장 목록 조회 실패:', error);
+        res.status(500).json({ success: false, stores: [] });
+    }
+});
+
+// ==========================================
 // [섹션 C] 오프라인 좌수왕 API (카운트/대시보드)
 // ==========================================
 
@@ -1155,186 +1179,6 @@ app.get('/api/cafe24/products', async (req, res) => {
 });
 
 
-
-// ==========================================
-// [API 라우터 시작] (작성하신 코드)  12월 이벤트 
-// ==========================================
-
-// 1. [당첨자 명단 조회 API]
-app.get('/api/event-winners', async (req, res) => {
-    try {
-      // ★ db 변수가 위에서 연결된 상태여야 함
-      const collection = db.collection('event12_collection');
-  
-      const winners = await collection.find({ status: 'win' })
-        .sort({ updatedAt: -1 }) 
-        .limit(50) 
-        .toArray();
-  
-      const maskedWinners = winners.map(w => {
-        let id = w.userId || 'guest';
-        if (id.length > 3) {
-          id = id.slice(0, -3) + 'xxx'; 
-        } else {
-          id = id + 'xxx';
-        }
-        return { maskedId: id };
-      });
-  
-      res.json({ success: true, winners: maskedWinners });
-  
-    } catch (error) {
-      console.error('당첨자 조회 오류:', error);
-      res.status(500).json({ success: false, winners: [] });
-    }
-});
-
-// 2. [이벤트 참여 API]
-app.post('/api/play-event', async (req, res) => {
-    try {
-      const { userId, isRetry } = req.body; 
-  
-      // ★ 크리스마스 이벤트 확률 데이터 부분
-      const MAX_DAILY_WINNERS = 10; 
-      const WIN_PROBABILITY_PERCENT = 10; 
-  
-      // ★ 쿠폰 정보 (실제 발급될 쿠폰 번호와 이동 URL)
-      const PRIZE_COUPON_NO = "6083836502100001083";
-      const PRIZE_TARGET_URL = "https://yogibo.kr/surl/P/2571";
-  
-      if (!userId) {
-        return res.status(400).json({ success: false, message: '로그인이 필요합니다.' });
-      }
-  
-      const now = moment().tz('Asia/Seoul');
-      const todayStr = now.format('YYYY-MM-DD');
-      const collection = db.collection('event12_collection');
-  
-      console.log(`[EVENT] 유저: ${userId}, 재도전: ${isRetry}`);
-  
-      // (1) 평생 중복 체크 (★ 이 부분이 수정되었습니다)
-      const existingWin = await collection.findOne({ userId: userId, status: 'win' });
-      if (existingWin) {
-        // 이미 당첨된 경우: 쿠폰 다운로드 버튼을 다시 띄우기 위해 당첨 응답을 재전송합니다.
-        console.log('-> 결과: 이미 과거 당첨자, 쿠폰 다운로드 기회 재부여.');
-        
-        // 프론트엔드에서 승리 팝업(showPopup('win', ...))을 다시 띄우도록 응답
-        return res.status(200).json({ 
-          success: true,           // 성공으로 처리
-          code: 'ALREADY_WON_REPLAY', // 새로운 코드로 구분
-          isWin: true,             // 당첨 상태로 간주
-          message: '이미 당첨되셨습니다. 쿠폰을 다시 다운로드하시겠습니까?',
-          tryCount: 2,             // 팝업 로직에 영향 주지 않도록 2로 설정
-          couponData: { couponNo: PRIZE_COUPON_NO, targetUrl: PRIZE_TARGET_URL } 
-        });
-      }
-  
-      // (2) 오늘 참여 이력 체크 (기존 로직 유지)
-      const todayRecord = await collection.findOne({ userId: userId, date: todayStr });
-      
-      if (todayRecord) {
-        if (todayRecord.tryCount >= 2 || todayRecord.status === 'win') {
-          return res.status(200).json({ success: false, code: 'DAILY_LIMIT_EXCEEDED', message: '오늘의 기회 소진' });
-        }
-        if (!isRetry) {
-          return res.status(200).json({ success: false, code: 'RETRY_AVAILABLE', message: '공유 후 재도전 가능', tryCount: 1 });
-        }
-      }
-  
-      // (3) 당첨 여부 결정 (기존 로직 유지)
-      const dailyWinnerCount = await collection.countDocuments({ date: todayStr, status: 'win' });
-      
-      let isWin = false;
-      if (dailyWinnerCount < MAX_DAILY_WINNERS) { 
-            const randomVal = Math.random() * 100;
-            if (randomVal < WIN_PROBABILITY_PERCENT) {
-              isWin = true;
-            }
-      }
-  
-      const resultStatus = isWin ? 'win' : 'lose';
-  
-      // (4) DB 업데이트/저장 (기존 로직 유지)
-      if (todayRecord) {
-        await collection.updateOne(
-          { _id: todayRecord._id },
-          { $set: { status: resultStatus, updatedAt: new Date() }, $inc: { tryCount: 1 } }
-        );
-      } else {
-        await collection.insertOne({
-          userId: userId, date: todayStr, status: resultStatus, tryCount: 1, createdAt: new Date()
-        });
-      }
-  
-      // (5) 응답 (기존 로직 유지)
-      res.status(200).json({
-        success: true,
-        code: 'RESULT',
-        isWin: isWin,
-        message: isWin ? '축하합니다! 당첨되셨습니다.' : '아쉽지만 꽝입니다.',
-        tryCount: todayRecord ? 2 : 1,
-        couponData: isWin ? { couponNo: PRIZE_COUPON_NO, targetUrl: PRIZE_TARGET_URL } : null
-      });
-  
-    } catch (error) {
-      console.error('이벤트 에러:', error);
-      res.status(500).json({ success: false, message: '서버 오류' });
-    }
-});
-
-// 3. [카카오 키 조회 API] (추가된 부분)
-app.get('/api/kakao-key', (req, res) => {
-    // .env 파일의 KAKAO_JS_KEY를 읽어서 반환
-    const key = process.env.KAKAO_JS_KEY;
-    
-    if (!key) {
-        console.error("❌ 서버 경고: .env 파일에 KAKAO_JS_KEY가 없습니다.");
-    }
-
-    res.json({
-        success: true,
-        key: key 
-    });
-});
-app.get('/api/12Event', async (req, res) => {
-    try {
-        const collection = db.collection('event12_collection');
-
-        // 1. 데이터 조회 (DB)
-        const allRecords = await collection.find({})
-            .project({ _id: 0, userId: 1, date: 1, tryCount: 1, status: 1, createdAt: 1 })
-            .sort({ createdAt: 1 })
-            .toArray();
-
-        // 2. Excel Workbook 및 Worksheet 생성
-        const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('이벤트 참여 기록');
-
-        // 3. 헤더 정의 (순서와 이름 지정)
-        worksheet.columns = [
-            { header: '참여 아이디', key: 'userId', width: 20 },
-            { header: '참여 날짜 (KST)', key: 'date', width: 15 },
-            { header: '총 시도 횟수', key: 'tryCount', width: 10 },
-            { header: '최종 결과', key: 'status', width: 10 },
-        ];
-
-        // 4. 데이터 추가
-        // MongoDB에서 가져온 데이터를 워크시트에 바로 추가합니다.
-        worksheet.addRows(allRecords);
-
-        // 5. HTTP 응답 헤더 설정 (.xlsx 파일 다운로드 유도)
-        res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.attachment('event_participants_' + moment().format('YYYYMMDD_HHmmss') + '.xlsx');
-        
-        // 6. 파일 전송
-        await workbook.xlsx.write(res);
-        res.end(); // 응답 완료
-
-    } catch (error) {
-        console.error('Excel 익스포트 오류:', error);
-        res.status(500).send('서버 오류: 엑셀 파일을 생성할 수 없습니다.');
-    }
-});
 
 //MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
 
