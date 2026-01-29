@@ -1336,6 +1336,106 @@ app.get('/api/12Event', async (req, res) => {
     }
 });
 
+//MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
+
+
+
+// ==========================================
+// [섹션 - 추가] 오프라인 판매 데이터 조회 API
+// ==========================================
+
+// 1. 실시간 판매 내역 및 합계 조회 (리스트용)
+app.get('/api/offline/sales/list', async (req, res) => {
+    try {
+        const { startDate, endDate, managerName } = req.query;
+        let query = {};
+
+        // 날짜 필터 (YYYY-MM-DD 문자열을 받아서 Date 객체로 변환)
+        if (startDate && endDate) {
+            const start = moment.tz(startDate, 'Asia/Seoul').startOf('day').toDate();
+            const end = moment.tz(endDate, 'Asia/Seoul').endOf('day').toDate();
+            query.created_at = { $gte: start, $lte: end };
+        }
+
+        // 매니저 필터 (선택 사항)
+        if (managerName && managerName !== 'all') {
+            query.manager_name = managerName;
+        }
+
+        const collection = db.collection(orderCollectionName); // 'offline_orders'
+
+        // 최신순 정렬하여 데이터 가져오기
+        const salesData = await collection.find(query)
+            .sort({ created_at: -1 })
+            .toArray();
+
+        // 요약 정보 계산 (총 매출액, 총 주문건수)
+        const totalRevenue = salesData.reduce((acc, cur) => acc + (cur.total_amount || 0), 0);
+        const totalCount = salesData.length;
+
+        res.json({
+            success: true,
+            summary: {
+                totalRevenue,
+                totalCount
+            },
+            data: salesData
+        });
+
+    } catch (error) {
+        console.error('실시간 판매 조회 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
+
+// 2. 주간/월간 일별 매출 통계 조회 (그래프/차트용)
+app.get('/api/offline/sales/stats', async (req, res) => {
+    try {
+        const { startDate, endDate, managerName } = req.query;
+        
+        // 날짜 범위 설정 (기본값: 최근 7일)
+        const end = endDate ? moment.tz(endDate, 'Asia/Seoul').endOf('day').toDate() : new Date();
+        const start = startDate ? moment.tz(startDate, 'Asia/Seoul').startOf('day').toDate() : moment().subtract(7, 'days').toDate();
+
+        const matchStage = {
+            created_at: { $gte: start, $lte: end }
+        };
+
+        if (managerName && managerName !== 'all') {
+            matchStage.manager_name = managerName;
+        }
+
+        const collection = db.collection(orderCollectionName);
+
+        // MongoDB Aggregation을 사용하여 일별 그룹화 및 합계 계산
+        const stats = await collection.aggregate([
+            { $match: matchStage },
+            {
+                $group: {
+                    _id: { 
+                        $dateToString: { format: "%Y-%m-%d", date: "$created_at", timezone: "Asia/Seoul" } 
+                    },
+                    dailyTotal: { $sum: "$total_amount" }, // 일별 매출 합계
+                    dailyCount: { $sum: 1 }                // 일별 주문 건수
+                }
+            },
+            { $sort: { _id: 1 } } // 날짜 오름차순 정렬
+        ]).toArray();
+
+        // 프론트엔드에서 사용하기 편하게 데이터 포맷팅
+        const formattedData = stats.map(item => ({
+            date: item._id,
+            amount: item.dailyTotal,
+            count: item.dailyCount
+        }));
+
+        res.json({ success: true, data: formattedData });
+
+    } catch (error) {
+        console.error('매출 통계 조회 오류:', error);
+        res.status(500).json({ success: false, message: '통계 조회 오류' });
+    }
+});
 
 
 
