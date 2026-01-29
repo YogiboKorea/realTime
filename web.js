@@ -1343,6 +1343,21 @@ app.get('/api/12Event', async (req, res) => {
 // 게시판, 근무시간, 서포터, 매장링크 관리
 // ==========================================
 
+// 0. [필수] 월(Month) 목록 조회 API (필터용) -> 이게 있어야 드롭다운이 나옴
+app.get('/api/months', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off');
+        // 'orders' 컬렉션에 있는 모든 month 값을 중복 없이 가져옴
+        const months = await dbOff.collection('orders').distinct('month');
+        // 내림차순 정렬 (최신순)
+        months.sort().reverse();
+        res.json({ success: true, months });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, months: [] });
+    }
+});
+
 // ------------------------------------------
 // 1. 게시판 (Messages) API
 // ------------------------------------------
