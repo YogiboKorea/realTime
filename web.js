@@ -1474,22 +1474,16 @@ app.get('/api/store-token/:token', async (req, res) => {
     }
 });
 
-// [API] 최신 DB 업데이트 시간 조회 (수정버전)
+// [API] 최신 DB 업데이트 시간 조회 (최종 수정버전)
 app.get('/api/system/last-update', async (req, res) => {
     try {
-        // ★ [핵심 수정] 글로벌 'db' 변수 대신, 명확하게 'off' DB를 지정합니다.
-        // (배치 파일이 'off' DB에 저장했으므로 여기서도 'off'를 봐야 합니다)
-        const dbOff = client.db('off'); 
+        // [수정] client.db('off') 대신, 이미 연결된 'db' 변수를 바로 사용합니다.
+        // 배치 파일에서도 db.collection('system_metadata')에 저장했으니, 여기서도 똑같이 가져오면 됩니다.
+        const meta = await db.collection('system_metadata').findOne({ key: 'last_update_time' });
         
-        const meta = await dbOff.collection('system_metadata').findOne({ key: 'last_update_time' });
-        
-        // 디버깅용 로그 (서버 콘솔에서 확인 가능)
-        console.log("🔎 시간 조회 시도:", meta); 
-
         if (meta && meta.timestamp) {
             res.json({ success: true, timestamp: meta.timestamp });
         } else {
-            // 데이터가 진짜 없는 경우
             res.json({ success: false, message: '기록 없음' });
         }
     } catch (err) {
@@ -1497,8 +1491,6 @@ app.get('/api/system/last-update', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
-
 
 
 
