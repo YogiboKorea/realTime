@@ -1474,7 +1474,7 @@ app.get('/api/store-token/:token', async (req, res) => {
     }
 });
 
-//업데이트 날짜 표시하기
+//업데이트 날짜 표시하기//
 app.get('/api/system/last-update', async (req, res) => {
     try {
         // 아까 저장한 system_metadata 컬렉션에서 시간을 꺼내옴
