@@ -1337,20 +1337,21 @@ app.get('/api/12Event', async (req, res) => {
 });
 
 //MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
+
 // ==========================================
-// [추가] 게시판/근무시간/서포터 API (OFF DB 사용)
+// ★ [추가] 오프라인 전용 API (OFF DB 사용)
+// 게시판, 근무시간, 서포터, 매장링크 관리
 // ==========================================
 
 // ------------------------------------------
-// 1. 게시판 (Messages)
+// 1. 게시판 (Messages) API
 // ------------------------------------------
 const messageCollectionName = 'messages'; 
 
 // 게시글 목록 조회
 app.get('/api/messages', async (req, res) => {
     try {
-        // ★ 'off' DB 사용
-        const dbOff = mongoClient.db('off');
+        const dbOff = mongoClient.db('off'); // ★ off DB 사용
         const collection = dbOff.collection(messageCollectionName);
         
         const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
@@ -1461,14 +1462,14 @@ app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
 });
 
 // ------------------------------------------
-// 2. 근무 시간 (Stats)
+// 2. 근무 시간 (Stats) API
 // ------------------------------------------
 const statsCollectionName = 'work_stats';
 
 // 근무시간 조회
 app.get('/api/stats', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const dbOff = mongoClient.db('off'); // ★ off DB 사용
         const collection = dbOff.collection(statsCollectionName);
         const stats = await collection.find({}).toArray();
         
@@ -1488,7 +1489,7 @@ app.get('/api/stats', async (req, res) => {
 // 근무시간 저장
 app.post('/api/stats', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(statsCollectionName);
         const { week, name, hours } = req.body;
         
@@ -1498,7 +1499,6 @@ app.post('/api/stats', async (req, res) => {
             { upsert: true }
         );
         
-        // 저장 후 데이터 갱신을 위해 다시 조회하지 않고 success만 반환 (프론트에서 reloadAll 호출함)
         res.json({ success: true });
     } catch (err) {
         console.error(err);
@@ -1507,11 +1507,11 @@ app.post('/api/stats', async (req, res) => {
 });
 
 // ------------------------------------------
-// 3. 서포터 (Supporters)
+// 3. 서포터 (Supporters) API
 // ------------------------------------------
 app.get('/api/supporters', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const dbOff = mongoClient.db('off'); // ★ off DB 사용
         const collection = dbOff.collection('supporters');
         
         const { store } = req.query;
@@ -1526,7 +1526,7 @@ app.get('/api/supporters', async (req, res) => {
 
 app.post('/api/supporters', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection('supporters');
         
         await collection.insertOne({ ...req.body, createdAt: new Date() });
@@ -1538,7 +1538,7 @@ app.post('/api/supporters', async (req, res) => {
 
 app.put('/api/supporters/:id', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection('supporters');
         
         await collection.updateOne(
@@ -1553,7 +1553,7 @@ app.put('/api/supporters/:id', async (req, res) => {
 
 app.delete('/api/supporters/:id', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection('supporters');
         
         await collection.deleteOne({ _id: new ObjectId(req.params.id) });
@@ -1563,25 +1563,57 @@ app.delete('/api/supporters/:id', async (req, res) => {
     }
 });
 
-// ==========================================
-// [추가] 월(Month) 목록 조회 API (필터용)
-// ==========================================
-app.get('/api/months', async (req, res) => {
+// ------------------------------------------
+// 4. 매장 링크 토큰 관리 (Store Tokens) API
+// ------------------------------------------
+
+// 토큰 목록 조회 (팝업용 - 이게 없어서 4번째 스샷 에러 발생)
+app.get('/api/store-tokens', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        // orders 컬렉션에서 'month' 필드의 값들만 중복 없이 가져옴 (예: ['2026-01', '2025-12', ...])
-        const months = await dbOff.collection('orders').distinct('month');
+        const dbOff = mongoClient.db('off'); // ★ off DB 사용
+        const tokens = await dbOff.collection('store_tokens').find({}).toArray();
         
-        // 내림차순 정렬 (최신 월이 위로)
-        months.sort().reverse();
+        const map = {};
+        tokens.forEach(t => { map[t.store] = t.token; });
         
-        res.json({ success: true, months });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, months: [] });
+        res.json({ success: true, tokens: map });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
     }
 });
 
+// 토큰 생성 (신규)
+app.post('/api/store-token', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off');
+        const { store } = req.body;
+        const token = `store_${Math.random().toString(36).substring(2, 10)}`;
+        
+        await dbOff.collection('store_tokens').updateOne(
+            { store },
+            { $set: { token, createdAt: new Date() } },
+            { upsert: true }
+        );
+        res.json({ success: true, token, store });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+});
+
+// 토큰 검증 (접속용)
+app.get('/api/store-token/:token', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off');
+        const { token } = req.params;
+        
+        const data = await dbOff.collection('store_tokens').findOne({ token });
+        if (!data) return res.status(404).json({ success: false });
+        
+        res.json({ success: true, store: data.store });
+    } catch (err) { 
+        res.status(500).json({ success: false }); 
+    }
+});
 
 
 
