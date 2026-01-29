@@ -1338,15 +1338,19 @@ app.get('/api/12Event', async (req, res) => {
 
 //MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
 // ==========================================
-// [수정] 게시판 (Messages) API -> 'off' DB 사용
+// [추가] 게시판/근무시간/서포터 API (OFF DB 사용)
 // ==========================================
+
+// ------------------------------------------
+// 1. 게시판 (Messages)
+// ------------------------------------------
 const messageCollectionName = 'messages'; 
 
-// 1. 게시글 목록 조회
+// 게시글 목록 조회
 app.get('/api/messages', async (req, res) => {
     try {
-        // ★ [핵심] 'off' 데이터베이스를 직접 지정
-        const dbOff = mongoClient.db('off'); 
+        // ★ 'off' DB 사용
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(messageCollectionName);
         
         const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
@@ -1358,13 +1362,11 @@ app.get('/api/messages', async (req, res) => {
     }
 });
 
-// 2. 게시글 작성
+// 게시글 작성
 app.post('/api/messages', async (req, res) => {
     try {
-        // ★ [핵심] 'off' 데이터베이스 사용
         const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(messageCollectionName);
-
         const { store, week, manager, title, content, isGlobal, isStoreNotice } = req.body;
         
         const newMessage = {
@@ -1390,10 +1392,10 @@ app.post('/api/messages', async (req, res) => {
     }
 });
 
-// 3. 게시글 삭제
+// 게시글 삭제
 app.delete('/api/messages/:id', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(messageCollectionName);
         const { id } = req.params;
         
@@ -1408,10 +1410,10 @@ app.delete('/api/messages/:id', async (req, res) => {
     }
 });
 
-// 4. 댓글 작성
+// 댓글 작성
 app.post('/api/messages/:id/comments', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(messageCollectionName);
         const { id } = req.params;
         const { manager, content } = req.body;
@@ -1437,10 +1439,10 @@ app.post('/api/messages/:id/comments', async (req, res) => {
     }
 });
 
-// 5. 댓글 삭제
+// 댓글 삭제
 app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // 'off' DB
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(messageCollectionName);
         const { id, cmtId } = req.params;
         
@@ -1458,18 +1460,16 @@ app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     }
 });
 
-// ==========================================
-// [수정] 근무 시간 (Stats) API -> 'off' DB 사용
-// ==========================================
-const statsCollectionName = 'work_stats'; 
+// ------------------------------------------
+// 2. 근무 시간 (Stats)
+// ------------------------------------------
+const statsCollectionName = 'work_stats';
 
-// 1. 근무시간 조회
+// 근무시간 조회
 app.get('/api/stats', async (req, res) => {
     try {
-        // ★ [핵심] 'off' 데이터베이스 사용
-        const dbOff = mongoClient.db('off');
+        const dbOff = mongoClient.db('off'); // 'off' DB 사용
         const collection = dbOff.collection(statsCollectionName);
-        
         const stats = await collection.find({}).toArray();
         
         const result = {};
@@ -1485,13 +1485,11 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
-// 2. 근무시간 저장
+// 근무시간 저장
 app.post('/api/stats', async (req, res) => {
     try {
-        // ★ [핵심] 'off' 데이터베이스 사용
-        const dbOff = mongoClient.db('off');
+        const dbOff = mongoClient.db('off'); // 'off' DB 사용
         const collection = dbOff.collection(statsCollectionName);
-        
         const { week, name, hours } = req.body;
         
         await collection.updateOne(
@@ -1511,6 +1509,63 @@ app.post('/api/stats', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false });
+    }
+});
+
+// ------------------------------------------
+// 3. 서포터 (Supporters)
+// ------------------------------------------
+app.get('/api/supporters', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const collection = dbOff.collection('supporters');
+        
+        const { store } = req.query;
+        const query = store && store !== 'all' ? { store } : {};
+        
+        const list = await collection.find(query).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, list: list.map(item => ({ ...item, id: item._id })) });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+});
+
+app.post('/api/supporters', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const collection = dbOff.collection('supporters');
+        
+        await collection.insertOne({ ...req.body, createdAt: new Date() });
+        res.json({ success: true });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+});
+
+app.put('/api/supporters/:id', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const collection = dbOff.collection('supporters');
+        
+        await collection.updateOne(
+            { _id: new ObjectId(req.params.id) }, 
+            { $set: { ...req.body, updatedAt: new Date() } }
+        );
+        res.json({ success: true });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
+    }
+});
+
+app.delete('/api/supporters/:id', async (req, res) => {
+    try {
+        const dbOff = mongoClient.db('off'); // 'off' DB 사용
+        const collection = dbOff.collection('supporters');
+        
+        await collection.deleteOne({ _id: new ObjectId(req.params.id) });
+        res.json({ success: true });
+    } catch (err) { 
+        res.status(500).json({ success: false, error: err.message }); 
     }
 });
 
