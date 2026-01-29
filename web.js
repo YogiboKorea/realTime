@@ -1337,18 +1337,19 @@ app.get('/api/12Event', async (req, res) => {
 });
 
 //MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
-
 // ==========================================
-// [추가] 게시판 (Messages) API
+// [수정] 게시판 (Messages) API -> 'off' DB 사용
 // ==========================================
-const messageCollectionName = 'messages'; // 게시판용 컬렉션 이름
+const messageCollectionName = 'messages'; 
 
 // 1. 게시글 목록 조회
 app.get('/api/messages', async (req, res) => {
     try {
-        const collection = db.collection(messageCollectionName);
+        // ★ [핵심] 'off' 데이터베이스를 직접 지정
+        const dbOff = mongoClient.db('off'); 
+        const collection = dbOff.collection(messageCollectionName);
+        
         const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
-        // 프론트엔드 호환성을 위해 _id를 id로 변환
         const result = messages.map(m => ({ ...m, id: m._id }));
         res.json({ success: true, messages: result });
     } catch (err) {
@@ -1360,7 +1361,10 @@ app.get('/api/messages', async (req, res) => {
 // 2. 게시글 작성
 app.post('/api/messages', async (req, res) => {
     try {
-        const collection = db.collection(messageCollectionName);
+        // ★ [핵심] 'off' 데이터베이스 사용
+        const dbOff = mongoClient.db('off');
+        const collection = dbOff.collection(messageCollectionName);
+
         const { store, week, manager, title, content, isGlobal, isStoreNotice } = req.body;
         
         const newMessage = {
@@ -1378,7 +1382,6 @@ app.post('/api/messages', async (req, res) => {
 
         await collection.insertOne(newMessage);
         
-        // 갱신된 리스트 반환
         const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
         res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
     } catch (err) {
@@ -1390,7 +1393,8 @@ app.post('/api/messages', async (req, res) => {
 // 3. 게시글 삭제
 app.delete('/api/messages/:id', async (req, res) => {
     try {
-        const collection = db.collection(messageCollectionName);
+        const dbOff = mongoClient.db('off'); // 'off' DB
+        const collection = dbOff.collection(messageCollectionName);
         const { id } = req.params;
         
         if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
@@ -1407,14 +1411,15 @@ app.delete('/api/messages/:id', async (req, res) => {
 // 4. 댓글 작성
 app.post('/api/messages/:id/comments', async (req, res) => {
     try {
-        const collection = db.collection(messageCollectionName);
+        const dbOff = mongoClient.db('off'); // 'off' DB
+        const collection = dbOff.collection(messageCollectionName);
         const { id } = req.params;
         const { manager, content } = req.body;
         
         if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
 
         const newComment = {
-            id: Date.now(), // 댓글 고유 ID (삭제용)
+            id: Date.now(),
             manager, 
             content, 
             date: moment().tz('Asia/Seoul').format('YYYY-MM-DD')
@@ -1435,7 +1440,8 @@ app.post('/api/messages/:id/comments', async (req, res) => {
 // 5. 댓글 삭제
 app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
-        const collection = db.collection(messageCollectionName);
+        const dbOff = mongoClient.db('off'); // 'off' DB
+        const collection = dbOff.collection(messageCollectionName);
         const { id, cmtId } = req.params;
         
         if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
@@ -1453,17 +1459,19 @@ app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
 });
 
 // ==========================================
-// [추가] 근무 시간 (Stats) API
+// [수정] 근무 시간 (Stats) API -> 'off' DB 사용
 // ==========================================
-const statsCollectionName = 'work_stats'; // 근무시간용 컬렉션 이름
+const statsCollectionName = 'work_stats'; 
 
 // 1. 근무시간 조회
 app.get('/api/stats', async (req, res) => {
     try {
-        const collection = db.collection(statsCollectionName);
+        // ★ [핵심] 'off' 데이터베이스 사용
+        const dbOff = mongoClient.db('off');
+        const collection = dbOff.collection(statsCollectionName);
+        
         const stats = await collection.find({}).toArray();
         
-        // 프론트엔드 포맷으로 변환: result[week][managerName] = { hours: ... }
         const result = {};
         stats.forEach(doc => {
             if (!result[doc.week]) result[doc.week] = {};
@@ -1480,17 +1488,18 @@ app.get('/api/stats', async (req, res) => {
 // 2. 근무시간 저장
 app.post('/api/stats', async (req, res) => {
     try {
-        const collection = db.collection(statsCollectionName);
+        // ★ [핵심] 'off' 데이터베이스 사용
+        const dbOff = mongoClient.db('off');
+        const collection = dbOff.collection(statsCollectionName);
+        
         const { week, name, hours } = req.body;
         
-        // 해당 주차, 해당 매니저의 데이터를 업데이트 (없으면 생성)
         await collection.updateOne(
             { week, name },
             { $set: { hours: Number(hours), updatedAt: new Date() } },
             { upsert: true }
         );
         
-        // 저장된 전체 통계 다시 반환 (선택사항, 여기선 success만 줌)
         const stats = await collection.find({}).toArray();
         const result = {};
         stats.forEach(doc => {
