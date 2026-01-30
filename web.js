@@ -1400,18 +1400,24 @@ app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
         res.status(500).json({ success: false });
     }
 });
-
 // ------------------------------------------
-// 2. 근무 시간 (Stats) API
+// 2. 근무 시간 (Stats) API - [수정됨]
 // ------------------------------------------
 const statsCollectionName = 'work_stats';
 
-// 근무시간 조회
+// 근무시간 조회 (월별 필터링 추가)
 app.get('/api/stats', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // ★ off DB 사용
+        const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(statsCollectionName);
-        const stats = await collection.find({}).toArray();
+        
+        // ★ [핵심] 클라이언트가 요청한 'month' 파라미터를 받음
+        const { month } = req.query; 
+        
+        // month가 있으면 해당 월 데이터만, 없으면 빈 값(혹은 전체) 반환
+        const query = month ? { month } : {};
+
+        const stats = await collection.find(query).toArray();
         
         const result = {};
         stats.forEach(doc => {
@@ -1426,15 +1432,19 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
-// 근무시간 저장
+// 근무시간 저장 (월 정보 추가 저장)
 app.post('/api/stats', async (req, res) => {
     try {
         const dbOff = mongoClient.db('off');
         const collection = dbOff.collection(statsCollectionName);
-        const { week, name, hours } = req.body;
         
+        // ★ [핵심] body에서 month도 같이 받음
+        const { week, name, hours, month } = req.body;
+        
+        if (!month) return res.status(400).json({ success: false, message: 'Month is required' });
+
         await collection.updateOne(
-            { week, name },
+            { week, name, month }, // ★ 조건에 month 추가 (그래야 다른 월과 겹치지 않음)
             { $set: { hours: Number(hours), updatedAt: new Date() } },
             { upsert: true }
         );
@@ -1445,7 +1455,6 @@ app.post('/api/stats', async (req, res) => {
         res.status(500).json({ success: false });
     }
 });
-
 // ------------------------------------------
 // 3. 서포터 (Supporters) API
 // ------------------------------------------
