@@ -1299,82 +1299,33 @@ app.post('/api/messages/:id/comments', async (req, res) => {
     }
 });
 // ==========================================
-// 1. [신규] 게시글 본문 수정 API (PUT)
+// 1. [게시글 본문 수정 API] (DB 연결 수정됨)
 // ==========================================
 app.put('/api/messages/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { title, content } = req.body;
 
-        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'ID 오류' });
-
-        const result = await db.collection('messages').updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { title, content, updatedAt: new Date() } } // 수정 시간도 기록하면 좋음
-        );
-
-        if (result.matchedCount === 0) return res.status(404).json({ success: false, message: '글을 찾을 수 없습니다.' });
-
-        // 최신 목록 반환
-        const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
-        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-// ==========================================
-// [API] 게시글 본문 수정 (PUT)
-// ==========================================
-app.put('/api/messages/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { title, content } = req.body;
-
-        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'ID 오류' });
-
-        const result = await db.collection('messages').updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { title, content, updatedAt: new Date() } } 
-        );
-
-        if (result.matchedCount === 0) return res.status(404).json({ success: false, message: '글을 찾을 수 없습니다.' });
-
-        // 최신 목록 반환
-        const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
-        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-// ==========================================
-// 1. [게시글 본문 수정 API] (강력한 버전)
-// ==========================================
-app.put('/api/messages/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { title, content } = req.body;
-
-        // ID 형식 체크 (MongoDB ObjectID 형식인지 확인)
+        // ID 형식 체크
         if (!ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: '잘못된 게시글 ID 형식입니다.' });
         }
 
-        // DB 업데이트 실행
-        const result = await db.collection('messages').updateOne(
-            { _id: new ObjectId(id) }, // ★ 반드시 ObjectId로 변환해서 찾기
+        // ★ [핵심 수정] 'off' DB를 명시적으로 사용합니다.
+        const dbOff = mongoClient.db('off');
+        const collection = dbOff.collection('messages');
+
+        const result = await collection.updateOne(
+            { _id: new ObjectId(id) }, 
             { $set: { title: title, content: content, updatedAt: new Date() } }
         );
 
         if (result.matchedCount === 0) {
-            return res.status(404).json({ success: false, message: '글을 찾을 수 없습니다. (이미 삭제되었거나 ID 오류)' });
+            return res.status(404).json({ success: false, message: '글을 찾을 수 없습니다. (ID 불일치 또는 DB 오류)' });
         }
 
-        // 성공하면 최신 목록 반환
-        const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
+        // 성공 시 최신 목록 반환
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
         res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
 
     } catch (err) {
@@ -1384,7 +1335,7 @@ app.put('/api/messages/:id', async (req, res) => {
 });
 
 // ==========================================
-// 2. [댓글 수정 API] (숫자/문자 ID 자동 처리)
+// 2. [댓글 수정 API] (DB 연결 수정됨 + ID 자동 처리)
 // ==========================================
 app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
@@ -1396,17 +1347,19 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
             return res.status(400).json({ success: false, message: '게시글 ID 오류' });
         }
 
-        // ★ [핵심] 1차 시도: 댓글 ID를 '숫자'로 변환해서 찾아본다.
-        // (대부분의 댓글 ID는 Date.now()로 생성되어 숫자입니다)
-        let result = await db.collection('messages').updateOne(
+        // ★ [핵심 수정] 'off' DB를 명시적으로 사용합니다.
+        const dbOff = mongoClient.db('off');
+        const collection = dbOff.collection('messages');
+
+        // 1차 시도: 댓글 ID를 '숫자'로 변환해서 찾아봄
+        let result = await collection.updateOne(
             { _id: new ObjectId(msgId), "comments.id": Number(cmtIdParam) },
             { $set: { "comments.$.content": content } }
         );
 
-        // ★ [핵심] 2차 시도: 만약 실패했다면 '문자'로 다시 찾아본다.
-        // (혹시 데이터가 문자로 저장되어 있을 경우 대비)
+        // 2차 시도: 실패했다면 '문자'로 다시 찾아봄
         if (result.matchedCount === 0) {
-            result = await db.collection('messages').updateOne(
+            result = await collection.updateOne(
                 { _id: new ObjectId(msgId), "comments.id": cmtIdParam },
                 { $set: { "comments.$.content": content } }
             );
@@ -1418,7 +1371,7 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
         }
 
         // 성공 시 최신 목록 반환
-        const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
+        const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
         res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
 
     } catch (err) {
@@ -1426,6 +1379,7 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
 // 댓글 삭제
 app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
@@ -1536,7 +1490,6 @@ app.put('/api/supporters/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 });
-
 
 app.delete('/api/supporters/:id', async (req, res) => {
     try {
