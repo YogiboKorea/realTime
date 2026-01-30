@@ -1350,42 +1350,41 @@ app.put('/api/messages/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
 // ==========================================
-// [API] 댓글 수정 (PUT) - ID 타입 자동 보정
+// [API] 댓글 수정 (정석 방법)
 // ==========================================
 app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
         const msgId = req.params.id;
-        const cmtIdParam = req.params.cmtId;
-        const cmtIdNum = Number(cmtIdParam); // 숫자로 변환 시도
+        const cmtId = req.params.cmtId;
         const { content } = req.body;
 
-        if (!ObjectId.isValid(msgId)) return res.status(400).json({ success: false, message: '게시글 ID 오류' });
+        // 1. 게시글 ID 검사 (ObjectID 형식이 아니면 탈락)
+        if (!ObjectId.isValid(msgId)) {
+            return res.status(400).json({ success: false, message: '게시글 ID 형식이 잘못되었습니다.' });
+        }
 
-        // 1. 숫자로 먼저 찾아봄
-        let result = await db.collection('messages').updateOne(
-            { _id: new ObjectId(msgId), "comments.id": cmtIdNum },
-            { $set: { "comments.$.content": content } }
+        // 2. 업데이트 실행
+        // - 게시글(_id): ObjectID로 변환해서 찾음
+        // - 댓글(comments.id): 숫자(Number)로 변환해서 찾음 (저장할 때 Date.now()를 썼기 때문)
+        const result = await db.collection('messages').updateOne(
+            { 
+                _id: new ObjectId(msgId),      // ★ 게시글은 ObjectID
+                "comments.id": Number(cmtId)   // ★ 댓글은 숫자(Number)로 변환
+            },
+            { $set: { "comments.$.content": content } } // $는 찾은 그 댓글을 의미함
         );
 
-        // 2. 실패하면 문자로 다시 찾아봄 (기존 데이터 호환성)
         if (result.matchedCount === 0) {
-            result = await db.collection('messages').updateOne(
-                { _id: new ObjectId(msgId), "comments.id": cmtIdParam },
-                { $set: { "comments.$.content": content } }
-            );
+            return res.status(404).json({ success: false, message: '수정 실패: 글이 없거나 댓글 ID가 일치하지 않습니다.' });
         }
 
-        if (result.matchedCount === 0) {
-            return res.status(404).json({ success: false, message: '댓글을 찾을 수 없습니다.' });
-        }
-
+        // 성공하면 최신 목록 반환
         const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
         res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
 
     } catch (err) {
-        console.error(err);
+        console.error("댓글 수정 에러:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
