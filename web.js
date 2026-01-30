@@ -1324,27 +1324,52 @@ app.put('/api/messages/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+// ==========================================
+// [API] 게시글 본문 수정 (PUT)
+// ==========================================
+app.put('/api/messages/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, content } = req.body;
+
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'ID 오류' });
+
+        const result = await db.collection('messages').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { title, content, updatedAt: new Date() } } 
+        );
+
+        if (result.matchedCount === 0) return res.status(404).json({ success: false, message: '글을 찾을 수 없습니다.' });
+
+        // 최신 목록 반환
+        const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
+        res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 // ==========================================
-// 2. [수정] 댓글 수정 API (ID 인식 개선)
+// [API] 댓글 수정 (PUT) - ID 타입 자동 보정
 // ==========================================
 app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
         const msgId = req.params.id;
-        // ★ [핵심] ID가 숫자일 수도, 문자일 수도 있어서 둘 다 시도해봅니다.
         const cmtIdParam = req.params.cmtId;
-        const cmtIdNum = Number(cmtIdParam);
+        const cmtIdNum = Number(cmtIdParam); // 숫자로 변환 시도
         const { content } = req.body;
 
         if (!ObjectId.isValid(msgId)) return res.status(400).json({ success: false, message: '게시글 ID 오류' });
 
-        // 1차 시도: 숫자로 검색
+        // 1. 숫자로 먼저 찾아봄
         let result = await db.collection('messages').updateOne(
             { _id: new ObjectId(msgId), "comments.id": cmtIdNum },
             { $set: { "comments.$.content": content } }
         );
 
-        // 2차 시도: 실패했다면 문자로 검색 (가끔 DB에 문자로 들어가는 경우 대비)
+        // 2. 실패하면 문자로 다시 찾아봄 (기존 데이터 호환성)
         if (result.matchedCount === 0) {
             result = await db.collection('messages').updateOne(
                 { _id: new ObjectId(msgId), "comments.id": cmtIdParam },
@@ -1353,8 +1378,7 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
         }
 
         if (result.matchedCount === 0) {
-            console.log(`수정 실패 - 게시글: ${msgId}, 댓글ID: ${cmtIdParam}`);
-            return res.status(404).json({ success: false, message: '댓글을 찾을 수 없습니다. (ID 불일치)' });
+            return res.status(404).json({ success: false, message: '댓글을 찾을 수 없습니다.' });
         }
 
         const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
@@ -1365,7 +1389,6 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
 // 댓글 삭제
 app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
