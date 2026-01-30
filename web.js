@@ -1298,18 +1298,17 @@ app.post('/api/messages/:id/comments', async (req, res) => {
         res.status(500).json({ success: false });
     }
 });
-
-// [댓글 수정] API 추가
+// [API] 댓글 수정
 app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
         const msgId = req.params.id;
         const cmtId = Number(req.params.cmtId);
-        const { content } = req.body; // 수정할 내용
+        const { content } = req.body;
 
-        if (!ObjectId.isValid(msgId)) return res.status(400).json({ success: false, message: 'Invalid ID' });
+        if (!ObjectId.isValid(msgId)) return res.status(400).json({ success: false, message: 'ID 오류' });
         if (!content) return res.status(400).json({ success: false, message: '내용이 없습니다.' });
 
-        // MongoDB 배열 필터($)를 사용하여 특정 댓글만 수정
+        // MongoDB 배열 내 특정 항목 수정 ($ 사용)
         const result = await db.collection('messages').updateOne(
             { _id: new ObjectId(msgId), "comments.id": cmtId },
             { $set: { "comments.$.content": content } }
@@ -1317,7 +1316,7 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
 
         if (result.matchedCount === 0) return res.status(404).json({ success: false, message: '댓글을 찾을 수 없습니다.' });
 
-        // 수정된 전체 메시지 목록 반환
+        // 수정 후 최신 목록 반환
         const messages = await db.collection('messages').find({}).sort({ createdAt: -1 }).toArray();
         res.json({ success: true, messages: messages.map(m => ({ ...m, id: m._id })) });
 
@@ -1326,6 +1325,7 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
 // 댓글 삭제
 app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
