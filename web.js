@@ -25,8 +25,8 @@ const PORT = 8014; // 8014 포트로 통일
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = 'UeY0l1RHDi5DRXWHdMamJH'; 
-let refreshToken = 'tDftgE64RaDY3CSojHvNeD'; 
+let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; 
+let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -1089,18 +1089,9 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 });
 
 
-
-
-
-
-
-
-
-
-
-
+//오프라인 주문서 부분
 // ==========================================
-// ★★★ [수정됨] Cafe24 상품 검색 API (이미지 포함)  d오프라인 주문서 관련 DB데이터★★★
+// [API] Cafe24 상품 검색 (기존 유지)
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -1112,7 +1103,7 @@ app.get('/api/cafe24/products', async (req, res) => {
 
         console.log(`[Cafe24] 검색 시작: "${keyword}"`);
 
-        // ★★★ [핵심 수정] embed에 'images' 추가, fields 제거 ★★★
+        // 1. Cafe24 API 호출
         const response = await apiRequest(
             'GET',
             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
@@ -1122,17 +1113,16 @@ app.get('/api/cafe24/products', async (req, res) => {
                 'product_name': keyword,
                 'display': 'T',
                 'selling': 'T',
-                'embed': 'options,images',  // ★ images 추가!
+                'embed': 'options',      // ★ 옵션 포함 요청
+                'fields': 'product_no,product_name,price,product_code,has_option,options',
                 'limit': 50
-                // fields 제거 - 이미지 필드가 포함되도록
             }
         );
 
-        const products = response.products || [];
+        const products = response.products;
 
-        // 데이터 정제 (이미지 URL 포함)
+        // 3. 데이터 정제
         const cleanData = products.map(item => {
-            // ========== 옵션 처리 (기존 코드 유지) ==========
             let myOptions = [];
             let rawOptionList = [];
 
@@ -1145,15 +1135,19 @@ app.get('/api/cafe24/products', async (req, res) => {
             }
 
             if (rawOptionList.length > 0) {
+                
+                // (A) '색상/Color/컬러' 이름이 있는 옵션을 찾음
                 let targetOption = rawOptionList.find(opt => {
                     const name = (opt.option_name || "").toLowerCase();
                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
                 });
 
+                // (B) 못 찾았으면, 그냥 첫 번째 옵션을 사용
                 if (!targetOption && rawOptionList.length > 0) {
                     targetOption = rawOptionList[0];
                 }
 
+                // (C) 값 추출
                 if (targetOption && targetOption.option_value) {
                     myOptions = targetOption.option_value.map(val => ({
                         option_code: val.value_no || val.value_code || val.value, 
@@ -1162,63 +1156,20 @@ app.get('/api/cafe24/products', async (req, res) => {
                 }
             }
 
-            // ========== ★★★ [NEW] 이미지 URL 추출 ★★★ ==========
-            let detailImage = '';
-            let listImage = '';
-            let smallImage = '';
-
-            // 1. 기본 이미지 필드 체크
-            if (item.detail_image) {
-                detailImage = item.detail_image;
-            }
-            if (item.list_image) {
-                listImage = item.list_image;
-            }
-            if (item.small_image) {
-                smallImage = item.small_image;
-            }
-
-            // 2. images 배열에서 추가 이미지 확인 (embed=images 결과)
-            if (item.images && Array.isArray(item.images) && item.images.length > 0) {
-                const firstImage = item.images[0];
-                if (!detailImage && firstImage.big) {
-                    detailImage = firstImage.big;
-                }
-                if (!listImage && firstImage.medium) {
-                    listImage = firstImage.medium;
-                }
-                if (!smallImage && firstImage.small) {
-                    smallImage = firstImage.small;
-                }
-            }
-
-            // 3. 대체 이미지 필드 체크
-            if (!detailImage && item.product_image) {
-                detailImage = item.product_image;
-            }
-            if (!detailImage && item.image_url) {
-                detailImage = item.image_url;
+            // 옵션이 비어있다면 로그
+            if (myOptions.length === 0 && item.has_option === 'T') {
+                console.log(`⚠️ [옵션추출실패] 상품명: ${item.product_name}, 구조확인필요`);
             }
 
             return {
                 product_no: item.product_no,
                 product_name: item.product_name,
                 price: Math.floor(Number(item.price)),
-                options: myOptions,
-                
-                // ★★★ [NEW] 이미지 URL 추가 ★★★
-                detail_image: detailImage,
-                list_image: listImage,
-                small_image: smallImage
+                options: myOptions
             };
         });
 
         console.log(`[Cafe24] 검색 완료: ${cleanData.length}건 반환`);
-        
-        // 이미지 있는 상품 수 확인 (디버깅용)
-        const withImage = cleanData.filter(p => p.detail_image || p.list_image).length;
-        console.log(`[Cafe24] 이미지 있는 상품: ${withImage}건`);
-
         res.json({ success: true, count: cleanData.length, data: cleanData });
 
     } catch (error) {
@@ -1226,215 +1177,6 @@ app.get('/api/cafe24/products', async (req, res) => {
         res.status(500).json({ success: false, message: '서버 오류 발생' });
     }
 });
-
-
-// ==========================================
-// [추가] 디버깅용 API - 카페24 원본 응답 확인
-// ==========================================
-app.get('/api/cafe24/products/debug', async (req, res) => {
-    try {
-        const { keyword } = req.query;
-
-        const response = await apiRequest(
-            'GET',
-            `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
-            null,
-            {
-                'shop_no': 1,
-                'product_name': keyword || '서포트',
-                'display': 'T',
-                'selling': 'T',
-                'embed': 'options,images',
-                'limit': 3  // 테스트용으로 3개만
-            }
-        );
-
-        // 원본 응답 그대로 반환 (디버깅용)
-        res.json({
-            success: true,
-            message: '카페24 API 원본 응답 (디버깅용)',
-            raw_products: response.products
-        });
-
-    } catch (error) {
-        console.error('[Debug] API 오류:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// ==========================================
-// ★ [NEW] 오프라인 주문 관리 API (DB명: OFForder)
-// ==========================================
-
-// 사용할 DB 및 컬렉션 명칭 정의
-const OFF_ORDER_DB = 'OFForder';
-const OFF_ORDER_COLLECTION = 'orders';
-
-// 1. [POST] 주문서 작성 (DB 저장)
-app.post('/api/orders', async (req, res) => {
-    try {
-        // 1. OFForder DB 연결
-        const dbOrder = mongoClient.db(OFF_ORDER_DB);
-        const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
-
-        const {
-            store_name, manager_name,
-            customer_name, customer_phone, address,
-            product_name, option_name,
-            quantity, price, total_amount, shipping_cost,
-            is_synced
-        } = req.body;
-
-        // 2. 저장할 데이터 객체 생성
-        const newOrder = {
-            store_name: store_name || '미지정',
-            manager_name: manager_name || '미지정',
-            customer_name: customer_name,
-            customer_phone: customer_phone,
-            address: address || '',
-            product_name: product_name,
-            option_name: option_name,
-            quantity: Number(quantity) || 1,
-            price: Number(price) || 0,
-            shipping_cost: Number(shipping_cost) || 0,
-            total_amount: Number(total_amount) || 0,
-            is_synced: is_synced || false, // ERP 전송 여부
-            created_at: new Date() // 현재 시간
-        };
-
-        // 3. DB Insert
-        const result = await collection.insertOne(newOrder);
-
-        console.log(`[OFForder] 신규 주문 저장 완료: ${result.insertedId}`);
-        res.json({ success: true, message: '주문이 저장되었습니다.', orderId: result.insertedId });
-
-    } catch (error) {
-        console.error('주문 저장 실패:', error);
-        res.status(500).json({ success: false, message: '서버 에러 발생' });
-    }
-});
-
-// 2. [GET] 주문 내역 조회 (필터링 및 정렬)
-app.get('/api/orders', async (req, res) => {
-    try {
-        const dbOrder = mongoClient.db(OFF_ORDER_DB);
-        const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
-
-        // 쿼리 파라미터 수신
-        const { store_name, startDate, endDate, keyword } = req.query;
-
-        // 검색 조건 구성
-        let query = {};
-
-        // 1) 매장 필터 (전체가 아닐 경우)
-        if (store_name && store_name !== '전체' && store_name !== 'null') {
-            query.store_name = store_name;
-        }
-
-        // 2) 날짜 필터 (생성일 기준)
-        // 만약 프론트에서 날짜를 안 보내면 최근 1달치만 가져오도록 설정 가능
-        if (startDate && endDate) {
-            query.created_at = {
-                $gte: new Date(startDate + "T00:00:00.000Z"),
-                $lte: new Date(endDate + "T23:59:59.999Z")
-            };
-        }
-
-        // 3) 키워드 검색 (고객명, 폰번호, 상품명)
-        if (keyword) {
-            query.$or = [
-                { customer_name: { $regex: keyword, $options: 'i' } },
-                { customer_phone: { $regex: keyword, $options: 'i' } },
-                { product_name: { $regex: keyword, $options: 'i' } }
-            ];
-        }
-
-        // DB 조회 (최신순 정렬)
-        const orders = await collection.find(query).sort({ created_at: -1 }).toArray();
-
-        res.json({ success: true, count: orders.length, data: orders });
-
-    } catch (error) {
-        console.error('주문 조회 실패:', error);
-        res.status(500).json({ success: false, message: '데이터 조회 실패' });
-    }
-});
-
-// 3. [POST] ERP 전송 상태 업데이트 (일괄 처리)
-// 프론트에서 전송 완료 버튼을 누르면 해당 주문들의 상태를 '전송됨(true)'으로 변경
-app.post('/api/orders/sync', async (req, res) => {
-    try {
-        const dbOrder = mongoClient.db(OFF_ORDER_DB);
-        const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
-
-        const { orderIds } = req.body; // 배열 형태로 ID들을 받음 예: ["id1", "id2"]
-
-        if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
-            // ID 목록이 없으면, 현재 '미전송' 상태인 모든 데이터를 처리해버리는 로직 (선택사항)
-            // 여기서는 안전하게 ID 목록이 있을 때만 처리
-            return res.status(400).json({ success: false, message: '전송할 주문 ID가 없습니다.' });
-        }
-
-        // 문자열 ID들을 ObjectId로 변환
-        const objectIds = orderIds.map(id => new ObjectId(id));
-
-        const result = await collection.updateMany(
-            { _id: { $in: objectIds } },
-            { 
-                $set: { 
-                    is_synced: true, 
-                    synced_at: new Date() 
-                } 
-            }
-        );
-
-        console.log(`[OFForder] ERP 상태 업데이트 완료: ${result.modifiedCount}건`);
-        res.json({ success: true, updatedCount: result.modifiedCount });
-
-    } catch (error) {
-        console.error('ERP 동기화 실패:', error);
-        res.status(500).json({ success: false, message: '상태 업데이트 실패' });
-    }
-});
-
-// 4. [DELETE] 주문 삭제
-app.delete('/api/orders/:id', async (req, res) => {
-    try {
-        const dbOrder = mongoClient.db(OFF_ORDER_DB);
-        const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
-        const { id } = req.params;
-
-        if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ success: false, message: '유효하지 않은 ID입니다.' });
-        }
-
-        const result = await collection.deleteOne({ _id: new ObjectId(id) });
-
-        if (result.deletedCount === 1) {
-            res.json({ success: true, message: '삭제되었습니다.' });
-        } else {
-            res.status(404).json({ success: false, message: '주문을 찾을 수 없습니다.' });
-        }
-
-    } catch (error) {
-        console.error('주문 삭제 실패:', error);
-        res.status(500).json({ success: false, message: '삭제 중 오류 발생' });
-    }
-});
-
-
-////////////////////////////////////////////////오프라인 주문서 이카운트 자동화
-
-
-
-
-
-
-
-
-
-
-
 
 
 
