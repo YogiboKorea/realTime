@@ -25,8 +25,8 @@ const PORT = 8014; // 8014 포트로 통일
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; 
-let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; 
+let accessToken = 'UeY0l1RHDi5DRXWHdMamJH'; 
+let refreshToken = 'tDftgE64RaDY3CSojHvNeD'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
