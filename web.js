@@ -1947,7 +1947,7 @@ app.get('/api/orders', async (req, res) => {
 });
 
 
-// 상품 검색 엔드포인트 - detail_image 포함
+
 app.get('/api/cafe24/products', async (req, res) => {
     try {
         const { keyword } = req.query;
@@ -1956,20 +1956,20 @@ app.get('/api/cafe24/products', async (req, res) => {
             return res.status(400).json({ success: false, message: '검색어를 입력해주세요.' });
         }
 
-        // 카페24 API 액세스 토큰 가져오기 (기존 함수 사용)
         const accessToken = await getCafe24AccessToken();
         
-        // 카페24 상품 검색 API 호출
-        // ★ embed 파라미터에 options, images 추가하여 이미지 정보도 함께 가져옴
+        // ★ 핵심: embed 파라미터에 'images' 추가
         const apiUrl = `https://${CAFE24_MALL_ID}.cafe24api.com/api/v2/admin/products`;
         
-        const response = await fetch(apiUrl + '?' + new URLSearchParams({
+        const params = new URLSearchParams({
             product_name: keyword,
-            display: 'T',           // 진열 중인 상품만
-            selling: 'T',           // 판매 중인 상품만
-            embed: 'options,images', // ★ 옵션과 이미지 정보 함께 요청
-            limit: 50               // 최대 50개
-        }), {
+            display: 'T',
+            selling: 'T',
+            embed: 'options,images',  // ★ images 추가로 이미지 정보 포함
+            limit: 50
+        });
+
+        const response = await fetch(`${apiUrl}?${params}`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
@@ -1979,24 +1979,55 @@ app.get('/api/cafe24/products', async (req, res) => {
         });
 
         if (!response.ok) {
+            const errorText = await response.text();
+            console.error('[Cafe24 API Error]', response.status, errorText);
             throw new Error(`Cafe24 API Error: ${response.status}`);
         }
 
         const data = await response.json();
         const products = data.products || [];
 
-        // 응답 데이터 가공 - 이미지 URL 포함
+        // 응답 데이터 가공
         const formattedProducts = products.map(product => {
-            // ★ 이미지 URL 추출 (detail_image가 우선, 없으면 list_image, small_image 순)
-            let detailImage = product.detail_image || '';
-            let listImage = product.list_image || '';
-            let smallImage = product.small_image || '';
+            // ★ 이미지 URL 추출 로직 개선
+            // 카페24 API는 이미지 URL을 //로 시작하는 프로토콜 상대 경로로 반환
+            // 프론트에서 https: 붙여서 사용해야 함
+            
+            let detailImage = '';
+            let listImage = '';
+            let smallImage = '';
 
-            // images 배열이 있는 경우 첫 번째 이미지 사용
-            if (product.images && product.images.length > 0) {
-                detailImage = detailImage || product.images[0].big || '';
-                listImage = listImage || product.images[0].medium || '';
-                smallImage = smallImage || product.images[0].small || '';
+            // 1. 기본 이미지 필드 체크
+            if (product.detail_image) {
+                detailImage = product.detail_image;
+            }
+            if (product.list_image) {
+                listImage = product.list_image;
+            }
+            if (product.small_image) {
+                smallImage = product.small_image;
+            }
+
+            // 2. images 배열에서 추가 이미지 확인
+            if (product.images && Array.isArray(product.images) && product.images.length > 0) {
+                const firstImage = product.images[0];
+                if (!detailImage && firstImage.big) {
+                    detailImage = firstImage.big;
+                }
+                if (!listImage && firstImage.medium) {
+                    listImage = firstImage.medium;
+                }
+                if (!smallImage && firstImage.small) {
+                    smallImage = firstImage.small;
+                }
+            }
+
+            // 3. 대체 이미지 필드 체크 (일부 API 버전에서 다른 필드명 사용)
+            if (!detailImage && product.product_image) {
+                detailImage = product.product_image;
+            }
+            if (!detailImage && product.image_url) {
+                detailImage = product.image_url;
             }
 
             return {
@@ -2004,24 +2035,19 @@ app.get('/api/cafe24/products', async (req, res) => {
                 product_code: product.product_code,
                 product_name: product.product_name,
                 price: Number(product.price) || 0,
-                retail_price: Number(product.retail_price) || 0,
-                supply_price: Number(product.supply_price) || 0,
                 
-                // ★ 이미지 URL 추가
-                detail_image: detailImage,    // 상세 이미지 (큰 이미지)
-                list_image: listImage,        // 목록 이미지 (중간 크기)
-                small_image: smallImage,      // 작은 이미지 (썸네일)
+                // ★ 이미지 URL 그대로 전달 (프론트에서 https: 처리)
+                detail_image: detailImage,
+                list_image: listImage,
+                small_image: smallImage,
                 
                 // 옵션 정보
                 options: (product.options || []).map(opt => ({
-                    option_code: opt.option_code || opt.option_no,
+                    option_code: opt.option_code || opt.option_no || '',
                     option_name: opt.option_value || opt.option_name || '기본',
-                    option_price: Number(opt.additional_amount) || 0,
-                    stock: opt.stock_quantity || 0
+                    option_price: Number(opt.additional_amount) || 0
                 })),
                 
-                // 기타 정보
-                stock: product.stock_quantity || 0,
                 sold_out: product.sold_out === 'T',
                 display: product.display === 'T',
                 selling: product.selling === 'T'
@@ -2030,6 +2056,16 @@ app.get('/api/cafe24/products', async (req, res) => {
 
         // 판매 가능한 상품만 필터링
         const availableProducts = formattedProducts.filter(p => !p.sold_out && p.display && p.selling);
+
+        // ★ 디버깅용 로그 (이미지 URL 확인)
+        console.log('[상품 검색 결과]', availableProducts.length, '개');
+        if (availableProducts.length > 0) {
+            console.log('[첫 번째 상품 이미지]', {
+                name: availableProducts[0].product_name,
+                detail_image: availableProducts[0].detail_image,
+                list_image: availableProducts[0].list_image
+            });
+        }
 
         res.json({ 
             success: true, 
@@ -2049,21 +2085,21 @@ app.get('/api/cafe24/products', async (req, res) => {
 
 
 // ==========================================
-// 카페24 단일 상품 상세 조회 (이미지 포함)
+// 디버깅용: 카페24 API 원본 응답 확인
 // ==========================================
-app.get('/api/cafe24/products/:productNo', async (req, res) => {
+app.get('/api/cafe24/products/debug', async (req, res) => {
     try {
-        const { productNo } = req.params;
-        
+        const { keyword } = req.query;
         const accessToken = await getCafe24AccessToken();
         
-        // ★ embed에 images 추가
-        const apiUrl = `https://${CAFE24_MALL_ID}.cafe24api.com/api/v2/admin/products/${productNo}`;
-        
-        const response = await fetch(apiUrl + '?' + new URLSearchParams({
-            embed: 'options,images'  // ★ 이미지 정보 포함
-        }), {
-            method: 'GET',
+        const apiUrl = `https://${CAFE24_MALL_ID}.cafe24api.com/api/v2/admin/products`;
+        const params = new URLSearchParams({
+            product_name: keyword || '서포트',
+            embed: 'options,images',
+            limit: 5
+        });
+
+        const response = await fetch(`${apiUrl}?${params}`, {
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
@@ -2071,48 +2107,16 @@ app.get('/api/cafe24/products/:productNo', async (req, res) => {
             }
         });
 
-        if (!response.ok) {
-            throw new Error(`Cafe24 API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const product = data.product;
-
-        if (!product) {
-            return res.status(404).json({ success: false, message: '상품을 찾을 수 없습니다.' });
-        }
-
-        // 이미지 추출
-        let detailImage = product.detail_image || '';
-        let listImage = product.list_image || '';
-        let smallImage = product.small_image || '';
-
-        if (product.images && product.images.length > 0) {
-            detailImage = detailImage || product.images[0].big || '';
-            listImage = listImage || product.images[0].medium || '';
-            smallImage = smallImage || product.images[0].small || '';
-        }
-
+        const rawData = await response.json();
+        
+        // 원본 응답 그대로 반환 (디버깅용)
         res.json({
             success: true,
-            data: {
-                product_no: product.product_no,
-                product_code: product.product_code,
-                product_name: product.product_name,
-                price: Number(product.price) || 0,
-                detail_image: detailImage,
-                list_image: listImage,
-                small_image: smallImage,
-                options: (product.options || []).map(opt => ({
-                    option_code: opt.option_code || opt.option_no,
-                    option_name: opt.option_value || opt.option_name || '기본',
-                    option_price: Number(opt.additional_amount) || 0
-                }))
-            }
+            message: '카페24 API 원본 응답 (디버깅용)',
+            raw_response: rawData
         });
 
     } catch (error) {
-        console.error('[에러] 상품 상세 조회 실패:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
