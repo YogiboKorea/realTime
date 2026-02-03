@@ -1099,168 +1099,168 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 
 
-// // ==========================================
-// // ★★★ [수정됨] Cafe24 상품 검색 API (이미지 포함)  d오프라인 주문서 관련 DB데이터★★★
-// // ==========================================
-// app.get('/api/cafe24/products', async (req, res) => {
-//     try {
-//         const { keyword } = req.query;
+// ==========================================
+// ★★★ [수정됨] Cafe24 상품 검색 API (이미지 포함)  d오프라인 주문서 관련 DB데이터★★★
+// ==========================================
+app.get('/api/cafe24/products', async (req, res) => {
+    try {
+        const { keyword } = req.query;
 
-//         if (!keyword) {
-//             return res.json({ success: true, count: 0, data: [] });
-//         }
+        if (!keyword) {
+            return res.json({ success: true, count: 0, data: [] });
+        }
 
-//         console.log(`[Cafe24] 검색 시작: "${keyword}"`);
+        console.log(`[Cafe24] 검색 시작: "${keyword}"`);
 
-//         // ★★★ [핵심 수정] embed에 'images' 추가, fields 제거 ★★★
-//         const response = await apiRequest(
-//             'GET',
-//             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
-//             null,
-//             {
-//                 'shop_no': 1,
-//                 'product_name': keyword,
-//                 'display': 'T',
-//                 'selling': 'T',
-//                 'embed': 'options,images',  // ★ images 추가!
-//                 'limit': 50
-//                 // fields 제거 - 이미지 필드가 포함되도록
-//             }
-//         );
+        // ★★★ [핵심 수정] embed에 'images' 추가, fields 제거 ★★★
+        const response = await apiRequest(
+            'GET',
+            `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
+            null,
+            {
+                'shop_no': 1,
+                'product_name': keyword,
+                'display': 'T',
+                'selling': 'T',
+                'embed': 'options,images',  // ★ images 추가!
+                'limit': 50
+                // fields 제거 - 이미지 필드가 포함되도록
+            }
+        );
 
-//         const products = response.products || [];
+        const products = response.products || [];
 
-//         // 데이터 정제 (이미지 URL 포함)
-//         const cleanData = products.map(item => {
-//             // ========== 옵션 처리 (기존 코드 유지) ==========
-//             let myOptions = [];
-//             let rawOptionList = [];
+        // 데이터 정제 (이미지 URL 포함)
+        const cleanData = products.map(item => {
+            // ========== 옵션 처리 (기존 코드 유지) ==========
+            let myOptions = [];
+            let rawOptionList = [];
 
-//             if (item.options) {
-//                 if (Array.isArray(item.options)) {
-//                     rawOptionList = item.options; 
-//                 } else if (item.options.options && Array.isArray(item.options.options)) {
-//                     rawOptionList = item.options.options; 
-//                 }
-//             }
+            if (item.options) {
+                if (Array.isArray(item.options)) {
+                    rawOptionList = item.options; 
+                } else if (item.options.options && Array.isArray(item.options.options)) {
+                    rawOptionList = item.options.options; 
+                }
+            }
 
-//             if (rawOptionList.length > 0) {
-//                 let targetOption = rawOptionList.find(opt => {
-//                     const name = (opt.option_name || "").toLowerCase();
-//                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
-//                 });
+            if (rawOptionList.length > 0) {
+                let targetOption = rawOptionList.find(opt => {
+                    const name = (opt.option_name || "").toLowerCase();
+                    return name.includes('색상') || name.includes('color') || name.includes('컬러');
+                });
 
-//                 if (!targetOption && rawOptionList.length > 0) {
-//                     targetOption = rawOptionList[0];
-//                 }
+                if (!targetOption && rawOptionList.length > 0) {
+                    targetOption = rawOptionList[0];
+                }
 
-//                 if (targetOption && targetOption.option_value) {
-//                     myOptions = targetOption.option_value.map(val => ({
-//                         option_code: val.value_no || val.value_code || val.value, 
-//                         option_name: val.value_name || val.option_text || val.name 
-//                     }));
-//                 }
-//             }
+                if (targetOption && targetOption.option_value) {
+                    myOptions = targetOption.option_value.map(val => ({
+                        option_code: val.value_no || val.value_code || val.value, 
+                        option_name: val.value_name || val.option_text || val.name 
+                    }));
+                }
+            }
 
-//             // ========== ★★★ [NEW] 이미지 URL 추출 ★★★ ==========
-//             let detailImage = '';
-//             let listImage = '';
-//             let smallImage = '';
+            // ========== ★★★ [NEW] 이미지 URL 추출 ★★★ ==========
+            let detailImage = '';
+            let listImage = '';
+            let smallImage = '';
 
-//             // 1. 기본 이미지 필드 체크
-//             if (item.detail_image) {
-//                 detailImage = item.detail_image;
-//             }
-//             if (item.list_image) {
-//                 listImage = item.list_image;
-//             }
-//             if (item.small_image) {
-//                 smallImage = item.small_image;
-//             }
+            // 1. 기본 이미지 필드 체크
+            if (item.detail_image) {
+                detailImage = item.detail_image;
+            }
+            if (item.list_image) {
+                listImage = item.list_image;
+            }
+            if (item.small_image) {
+                smallImage = item.small_image;
+            }
 
-//             // 2. images 배열에서 추가 이미지 확인 (embed=images 결과)
-//             if (item.images && Array.isArray(item.images) && item.images.length > 0) {
-//                 const firstImage = item.images[0];
-//                 if (!detailImage && firstImage.big) {
-//                     detailImage = firstImage.big;
-//                 }
-//                 if (!listImage && firstImage.medium) {
-//                     listImage = firstImage.medium;
-//                 }
-//                 if (!smallImage && firstImage.small) {
-//                     smallImage = firstImage.small;
-//                 }
-//             }
+            // 2. images 배열에서 추가 이미지 확인 (embed=images 결과)
+            if (item.images && Array.isArray(item.images) && item.images.length > 0) {
+                const firstImage = item.images[0];
+                if (!detailImage && firstImage.big) {
+                    detailImage = firstImage.big;
+                }
+                if (!listImage && firstImage.medium) {
+                    listImage = firstImage.medium;
+                }
+                if (!smallImage && firstImage.small) {
+                    smallImage = firstImage.small;
+                }
+            }
 
-//             // 3. 대체 이미지 필드 체크
-//             if (!detailImage && item.product_image) {
-//                 detailImage = item.product_image;
-//             }
-//             if (!detailImage && item.image_url) {
-//                 detailImage = item.image_url;
-//             }
+            // 3. 대체 이미지 필드 체크
+            if (!detailImage && item.product_image) {
+                detailImage = item.product_image;
+            }
+            if (!detailImage && item.image_url) {
+                detailImage = item.image_url;
+            }
 
-//             return {
-//                 product_no: item.product_no,
-//                 product_name: item.product_name,
-//                 price: Math.floor(Number(item.price)),
-//                 options: myOptions,
+            return {
+                product_no: item.product_no,
+                product_name: item.product_name,
+                price: Math.floor(Number(item.price)),
+                options: myOptions,
                 
-//                 // ★★★ [NEW] 이미지 URL 추가 ★★★
-//                 detail_image: detailImage,
-//                 list_image: listImage,
-//                 small_image: smallImage
-//             };
-//         });
+                // ★★★ [NEW] 이미지 URL 추가 ★★★
+                detail_image: detailImage,
+                list_image: listImage,
+                small_image: smallImage
+            };
+        });
 
-//         console.log(`[Cafe24] 검색 완료: ${cleanData.length}건 반환`);
+        console.log(`[Cafe24] 검색 완료: ${cleanData.length}건 반환`);
         
-//         // 이미지 있는 상품 수 확인 (디버깅용)
-//         const withImage = cleanData.filter(p => p.detail_image || p.list_image).length;
-//         console.log(`[Cafe24] 이미지 있는 상품: ${withImage}건`);
+        // 이미지 있는 상품 수 확인 (디버깅용)
+        const withImage = cleanData.filter(p => p.detail_image || p.list_image).length;
+        console.log(`[Cafe24] 이미지 있는 상품: ${withImage}건`);
 
-//         res.json({ success: true, count: cleanData.length, data: cleanData });
+        res.json({ success: true, count: cleanData.length, data: cleanData });
 
-//     } catch (error) {
-//         console.error('[Cafe24] API 오류:', error.response ? error.response.data : error.message);
-//         res.status(500).json({ success: false, message: '서버 오류 발생' });
-//     }
-// });
+    } catch (error) {
+        console.error('[Cafe24] API 오류:', error.response ? error.response.data : error.message);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
 
 
-// // ==========================================
-// // [추가] 디버깅용 API - 카페24 원본 응답 확인
-// // ==========================================
-// app.get('/api/cafe24/products/debug', async (req, res) => {
-//     try {
-//         const { keyword } = req.query;
+// ==========================================
+// [추가] 디버깅용 API - 카페24 원본 응답 확인
+// ==========================================
+app.get('/api/cafe24/products/debug', async (req, res) => {
+    try {
+        const { keyword } = req.query;
 
-//         const response = await apiRequest(
-//             'GET',
-//             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
-//             null,
-//             {
-//                 'shop_no': 1,
-//                 'product_name': keyword || '서포트',
-//                 'display': 'T',
-//                 'selling': 'T',
-//                 'embed': 'options,images',
-//                 'limit': 3  // 테스트용으로 3개만
-//             }
-//         );
+        const response = await apiRequest(
+            'GET',
+            `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
+            null,
+            {
+                'shop_no': 1,
+                'product_name': keyword || '서포트',
+                'display': 'T',
+                'selling': 'T',
+                'embed': 'options,images',
+                'limit': 3  // 테스트용으로 3개만
+            }
+        );
 
-//         // 원본 응답 그대로 반환 (디버깅용)
-//         res.json({
-//             success: true,
-//             message: '카페24 API 원본 응답 (디버깅용)',
-//             raw_products: response.products
-//         });
+        // 원본 응답 그대로 반환 (디버깅용)
+        res.json({
+            success: true,
+            message: '카페24 API 원본 응답 (디버깅용)',
+            raw_products: response.products
+        });
 
-//     } catch (error) {
-//         console.error('[Debug] API 오류:', error);
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
+    } catch (error) {
+        console.error('[Debug] API 오류:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // ==========================================
 // ★ [NEW] 오프라인 주문 관리 API (DB명: OFForder)
@@ -1424,8 +1424,6 @@ app.delete('/api/orders/:id', async (req, res) => {
 
 
 ////////////////////////////////////////////////오프라인 주문서 이카운트 자동화
-
-
 
 
 
