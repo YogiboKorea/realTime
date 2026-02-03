@@ -1,37 +1,42 @@
-// ==========================================
-// Yogibo 통합 백엔드 서버 (server.js) - Full Version
-// ==========================================
-
 // --- 1. 필요한 모듈 불러오기 ---
 const express = require('express');
 const axios = require('axios');
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb'); // ObjectId 추가
 const cors = require('cors');
 const moment = require('moment-timezone');
 const schedule = require('node-schedule');
 const multer = require('multer');
+const ftp = require('ftp');
 const crypto = require('crypto');
 require('dotenv').config();
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 
+
+
 // --- 2. Express 앱 및 포트 설정 ---
 const app = express();
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-const PORT = 8014;
+app.use(express.json()); 
+app.use(express.urlencoded({ extended: true })); 
+const PORT = 8014; // 8014 포트로 통일
 
 // --- 3. 전역 변수 및 .env 설정 ---
-let accessToken = 'B6sxr1WrHxujGvWbteE2JB';
-let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB';
+
+// Cafe24 API 및 랭킹 관련
+let accessToken = 'UeY0l1RHDi5DRXWHdMamJH'; 
+let refreshToken = 'tDftgE64RaDY3CSojHvNeD'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
-const mongoUri = process.env.MONGO_URI;
-const dbName = process.env.DB_NAME || 'yogibo'; // 기본 DB
+const mongoUri = process.env.MONGO_URI; // .env에서 로드
+const dbName = process.env.DB_NAME || 'yogibo'; // 없을 경우 기본값
+const collectionName = process.env.COLLECTION_NAME; 
+const tokenCollectionName = 'tokens';
+const rankingCollectionName = 'rankings';
 const MALLID = 'yogibo';
+const CATEGORY_NO = process.env.CATEGORY_NO || 858;
 
 // MongoDB 클라이언트 (전역)
 const mongoClient = new MongoClient(mongoUri, {
