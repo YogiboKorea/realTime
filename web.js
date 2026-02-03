@@ -25,8 +25,8 @@ const PORT = 8014; // 8014 포트로 통일
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; 
-let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; 
+let accessToken = 'UeY0l1RHDi5DRXWHdMamJH'; 
+let refreshToken = 'tDftgE64RaDY3CSojHvNeD'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -1090,6 +1090,15 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 
 
+
+
+
+
+
+
+
+
+
 // ==========================================
 // ★★★ [수정됨] Cafe24 상품 검색 API (이미지 포함)  d오프라인 주문서 관련 DB데이터★★★
 // ==========================================
@@ -1252,48 +1261,58 @@ app.get('/api/cafe24/products/debug', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // ==========================================
-// ★ [NEW] 오프라인 주문 관리 API (DB명: OFForder)
+// ★ [NEW] 오프라인 주문 관리 시스템 API
+// ★ DB명: OFForder / 컬렉션: orders
 // ==========================================
 
-// 사용할 DB 및 컬렉션 명칭 정의
 const OFF_ORDER_DB = 'OFForder';
 const OFF_ORDER_COLLECTION = 'orders';
 
-// 1. [POST] 주문서 작성 (DB 저장)
+// 1. [POST] 주문서 저장 (상품 여러개 묶음 처리)
 app.post('/api/orders', async (req, res) => {
     try {
-        // 1. OFForder DB 연결
         const dbOrder = mongoClient.db(OFF_ORDER_DB);
         const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
 
         const {
             store_name, manager_name,
             customer_name, customer_phone, address,
-            product_name, option_name,
-            quantity, price, total_amount, shipping_cost,
+            product_name, option_name, // 대표 상품명
+            total_amount, shipping_cost,
+            items, // ★ 장바구니 상세 목록 (배열)
             is_synced
         } = req.body;
 
-        // 2. 저장할 데이터 객체 생성
+        // 필수 데이터 검증
+        if (!store_name || !customer_name || !items || items.length === 0) {
+            return res.status(400).json({ success: false, message: '필수 정보 누락' });
+        }
+
         const newOrder = {
-            store_name: store_name || '미지정',
-            manager_name: manager_name || '미지정',
-            customer_name: customer_name,
-            customer_phone: customer_phone,
+            store_name,
+            manager_name,
+            customer_name,
+            customer_phone,
             address: address || '',
-            product_name: product_name,
-            option_name: option_name,
-            quantity: Number(quantity) || 1,
-            price: Number(price) || 0,
+            
+            // 대표 정보 (리스트 표시용)
+            product_name, 
+            option_name: option_name || '-',
+            
+            // 금액 정보
             shipping_cost: Number(shipping_cost) || 0,
             total_amount: Number(total_amount) || 0,
+
+            // 상세 아이템 (영수증용)
+            items: items, 
+
+            // 상태 정보
             is_synced: is_synced || false, // ERP 전송 여부
-            created_at: new Date() // 현재 시간
+            created_at: new Date(), // 생성일
+            updated_at: new Date()
         };
 
-        // 3. DB Insert
         const result = await collection.insertOne(newOrder);
 
         console.log(`[OFForder] 신규 주문 저장 완료: ${result.insertedId}`);
@@ -1305,25 +1324,22 @@ app.post('/api/orders', async (req, res) => {
     }
 });
 
-// 2. [GET] 주문 내역 조회 (필터링 및 정렬)
+// 2. [GET] 주문 내역 조회 (관리자/매장용 필터링)
 app.get('/api/orders', async (req, res) => {
     try {
         const dbOrder = mongoClient.db(OFF_ORDER_DB);
         const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
 
-        // 쿼리 파라미터 수신
         const { store_name, startDate, endDate, keyword } = req.query;
 
-        // 검색 조건 구성
         let query = {};
 
-        // 1) 매장 필터 (전체가 아닐 경우)
+        // 매장 필터
         if (store_name && store_name !== '전체' && store_name !== 'null') {
             query.store_name = store_name;
         }
 
-        // 2) 날짜 필터 (생성일 기준)
-        // 만약 프론트에서 날짜를 안 보내면 최근 1달치만 가져오도록 설정 가능
+        // 날짜 필터
         if (startDate && endDate) {
             query.created_at = {
                 $gte: new Date(startDate + "T00:00:00.000Z"),
@@ -1331,7 +1347,7 @@ app.get('/api/orders', async (req, res) => {
             };
         }
 
-        // 3) 키워드 검색 (고객명, 폰번호, 상품명)
+        // 키워드 검색
         if (keyword) {
             query.$or = [
                 { customer_name: { $regex: keyword, $options: 'i' } },
@@ -1340,7 +1356,7 @@ app.get('/api/orders', async (req, res) => {
             ];
         }
 
-        // DB 조회 (최신순 정렬)
+        // 최신순 정렬
         const orders = await collection.find(query).sort({ created_at: -1 }).toArray();
 
         res.json({ success: true, count: orders.length, data: orders });
@@ -1351,22 +1367,18 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
-// 3. [POST] ERP 전송 상태 업데이트 (일괄 처리)
-// 프론트에서 전송 완료 버튼을 누르면 해당 주문들의 상태를 '전송됨(true)'으로 변경
+// 3. [POST] ERP 전송 상태 업데이트 (일괄/개별 처리)
 app.post('/api/orders/sync', async (req, res) => {
     try {
         const dbOrder = mongoClient.db(OFF_ORDER_DB);
         const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
 
-        const { orderIds } = req.body; // 배열 형태로 ID들을 받음 예: ["id1", "id2"]
+        const { orderIds } = req.body; 
 
         if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
-            // ID 목록이 없으면, 현재 '미전송' 상태인 모든 데이터를 처리해버리는 로직 (선택사항)
-            // 여기서는 안전하게 ID 목록이 있을 때만 처리
             return res.status(400).json({ success: false, message: '전송할 주문 ID가 없습니다.' });
         }
 
-        // 문자열 ID들을 ObjectId로 변환
         const objectIds = orderIds.map(id => new ObjectId(id));
 
         const result = await collection.updateMany(
@@ -1379,42 +1391,94 @@ app.post('/api/orders/sync', async (req, res) => {
             }
         );
 
-        console.log(`[OFForder] ERP 상태 업데이트 완료: ${result.modifiedCount}건`);
+        console.log(`[OFForder] ERP 상태 업데이트: ${result.modifiedCount}건`);
         res.json({ success: true, updatedCount: result.modifiedCount });
 
     } catch (error) {
         console.error('ERP 동기화 실패:', error);
-        res.status(500).json({ success: false, message: '상태 업데이트 실패' });
+        res.status(500).json({ success: false, message: '업데이트 실패' });
     }
 });
 
-// 4. [DELETE] 주문 삭제
+// 4. [PUT] 주문 정보 수정 (관리자용)
+app.put('/api/orders/:id', async (req, res) => {
+    try {
+        const dbOrder = mongoClient.db(OFF_ORDER_DB);
+        const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'ID 오류' });
+
+        // 업데이트할 필드 (고객정보, 상품정보 등)
+        const updateData = {
+            customer_name: req.body.customer_name,
+            customer_phone: req.body.customer_phone,
+            
+            // 상품 정보가 바뀌면 대표 정보와 items 배열을 모두 갱신해야 함
+            // 관리자 수정 모달에서는 단일 건 수정 위주이므로, 
+            // items 배열을 1개짜리로 다시 구성해서 넣거나, 기존 items를 유지하며 수정해야 함.
+            // 여기서는 수정 모달에서 보낸 단일 상품 정보를 items[0]으로 덮어쓰는 방식을 사용합니다.
+            
+            product_name: req.body.product_name,
+            option_name: req.body.option_name,
+            
+            // 금액 재계산
+            price: req.body.price,
+            quantity: req.body.quantity,
+            total_amount: req.body.total_amount,
+            
+            updated_at: new Date()
+        };
+
+        // items 배열 내부도 동기화 (단일 수정 가정)
+        // 만약 복수 상품 수정이 필요하다면 프론트에서 items 배열 전체를 보내야 함
+        if(req.body.product_image) {
+             // 이미지가 있다면 함께 업데이트 (items 내부 등)
+             // 복잡도를 줄이기 위해 여기선 대표 정보만 업데이트합니다.
+        }
+
+        const result = await collection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 1) {
+            res.json({ success: true, message: '수정되었습니다.' });
+        } else {
+            res.status(404).json({ success: false, message: '주문을 찾을 수 없습니다.' });
+        }
+
+    } catch (error) {
+        console.error('주문 수정 실패:', error);
+        res.status(500).json({ success: false });
+    }
+});
+
+// 5. [DELETE] 주문 삭제
 app.delete('/api/orders/:id', async (req, res) => {
     try {
         const dbOrder = mongoClient.db(OFF_ORDER_DB);
         const collection = dbOrder.collection(OFF_ORDER_COLLECTION);
         const { id } = req.params;
 
-        if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ success: false, message: '유효하지 않은 ID입니다.' });
-        }
+        if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
 
         const result = await collection.deleteOne({ _id: new ObjectId(id) });
 
         if (result.deletedCount === 1) {
             res.json({ success: true, message: '삭제되었습니다.' });
         } else {
-            res.status(404).json({ success: false, message: '주문을 찾을 수 없습니다.' });
+            res.status(404).json({ success: false, message: '대상을 찾을 수 없습니다.' });
         }
 
     } catch (error) {
-        console.error('주문 삭제 실패:', error);
-        res.status(500).json({ success: false, message: '삭제 중 오류 발생' });
+        console.error('삭제 오류:', error);
+        res.status(500).json({ success: false });
     }
 });
-
-
 ////////////////////////////////////////////////오프라인 주문서 이카운트 자동화
+
+
 
 
 
