@@ -1103,10 +1103,8 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 
 
-
-
 // ==========================================
-// ★★★ [수정됨] Cafe24 상품 검색 API (이미지 포함)  d오프라인 주문서 관련 DB데이터★★★
+// ★★★ [수정됨] Cafe24 상품 검색 API (변수명 충돌 방지 적용) ★★★
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -1118,8 +1116,8 @@ app.get('/api/cafe24/products', async (req, res) => {
 
         console.log(`[Cafe24] 검색 시작: "${keyword}"`);
 
-        // ★★★ [핵심 수정] embed에 'images' 추가, fields 제거 ★★★
-        const response = await apiRequest(
+        // Cafe24 Admin API 호출
+        const cafe24Response = await apiRequest(
             'GET',
             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
             null,
@@ -1128,104 +1126,93 @@ app.get('/api/cafe24/products', async (req, res) => {
                 'product_name': keyword,
                 'display': 'T',
                 'selling': 'T',
-                'embed': 'options,images',  // ★ images 추가!
+                'embed': 'options,images',  // ★ 이미지 포함
                 'limit': 50
-                // fields 제거 - 이미지 필드가 포함되도록
             }
         );
 
-        const products = response.products || [];
+        // 변수명 변경: products -> fetchedProducts
+        const fetchedProducts = cafe24Response.products || [];
 
-        // 데이터 정제 (이미지 URL 포함)
-        const cleanData = products.map(item => {
-            // ========== 옵션 처리 (기존 코드 유지) ==========
-            let myOptions = [];
+        // 데이터 정제: cleanData -> parsedProductList
+        const parsedProductList = fetchedProducts.map(prodItem => {
+            
+            // 1. 옵션 처리 로직
+            let finalOptions = [];
             let rawOptionList = [];
 
-            if (item.options) {
-                if (Array.isArray(item.options)) {
-                    rawOptionList = item.options; 
-                } else if (item.options.options && Array.isArray(item.options.options)) {
-                    rawOptionList = item.options.options; 
+            if (prodItem.options) {
+                if (Array.isArray(prodItem.options)) {
+                    rawOptionList = prodItem.options; 
+                } else if (prodItem.options.options && Array.isArray(prodItem.options.options)) {
+                    rawOptionList = prodItem.options.options; 
                 }
             }
 
             if (rawOptionList.length > 0) {
+                // '색상', 'color', '컬러'가 포함된 옵션 찾기
                 let targetOption = rawOptionList.find(opt => {
                     const name = (opt.option_name || "").toLowerCase();
                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
                 });
 
+                // 없으면 첫 번째 옵션 사용
                 if (!targetOption && rawOptionList.length > 0) {
                     targetOption = rawOptionList[0];
                 }
 
+                // 옵션 값 추출
                 if (targetOption && targetOption.option_value) {
-                    myOptions = targetOption.option_value.map(val => ({
+                    finalOptions = targetOption.option_value.map(val => ({
                         option_code: val.value_no || val.value_code || val.value, 
                         option_name: val.value_name || val.option_text || val.name 
                     }));
                 }
             }
 
-            // ========== ★★★ [NEW] 이미지 URL 추출 ★★★ ==========
-            let detailImage = '';
-            let listImage = '';
-            let smallImage = '';
+            // 2. 이미지 URL 추출 로직
+            let imgDetail = '';
+            let imgList = '';
+            let imgSmall = '';
 
-            // 1. 기본 이미지 필드 체크
-            if (item.detail_image) {
-                detailImage = item.detail_image;
-            }
-            if (item.list_image) {
-                listImage = item.list_image;
-            }
-            if (item.small_image) {
-                smallImage = item.small_image;
-            }
+            // (1) 기본 필드 확인
+            if (prodItem.detail_image) imgDetail = prodItem.detail_image;
+            if (prodItem.list_image) imgList = prodItem.list_image;
+            if (prodItem.small_image) imgSmall = prodItem.small_image;
 
-            // 2. images 배열에서 추가 이미지 확인 (embed=images 결과)
-            if (item.images && Array.isArray(item.images) && item.images.length > 0) {
-                const firstImage = item.images[0];
-                if (!detailImage && firstImage.big) {
-                    detailImage = firstImage.big;
-                }
-                if (!listImage && firstImage.medium) {
-                    listImage = firstImage.medium;
-                }
-                if (!smallImage && firstImage.small) {
-                    smallImage = firstImage.small;
-                }
+            // (2) embed된 images 배열 확인
+            if (prodItem.images && Array.isArray(prodItem.images) && prodItem.images.length > 0) {
+                const firstImg = prodItem.images[0];
+                if (!imgDetail && firstImg.big) imgDetail = firstImg.big;
+                if (!imgList && firstImg.medium) imgList = firstImg.medium;
+                if (!imgSmall && firstImg.small) imgSmall = firstImg.small;
             }
 
-            // 3. 대체 이미지 필드 체크
-            if (!detailImage && item.product_image) {
-                detailImage = item.product_image;
-            }
-            if (!detailImage && item.image_url) {
-                detailImage = item.image_url;
-            }
+            // (3) 대체 필드 확인
+            if (!imgDetail && prodItem.product_image) imgDetail = prodItem.product_image;
+            if (!imgDetail && prodItem.image_url) imgDetail = prodItem.image_url;
 
+            // 최종 객체 반환
             return {
-                product_no: item.product_no,
-                product_name: item.product_name,
-                price: Math.floor(Number(item.price)),
-                options: myOptions,
+                product_no: prodItem.product_no,
+                product_name: prodItem.product_name,
+                price: Math.floor(Number(prodItem.price)),
+                options: finalOptions,
                 
-                // ★★★ [NEW] 이미지 URL 추가 ★★★
-                detail_image: detailImage,
-                list_image: listImage,
-                small_image: smallImage
+                // 이미지 필드
+                detail_image: imgDetail,
+                list_image: imgList,
+                small_image: imgSmall
             };
         });
 
-        console.log(`[Cafe24] 검색 완료: ${cleanData.length}건 반환`);
+        console.log(`[Cafe24] 검색 완료: ${parsedProductList.length}건 반환`);
         
-        // 이미지 있는 상품 수 확인 (디버깅용)
-        const withImage = cleanData.filter(p => p.detail_image || p.list_image).length;
-        console.log(`[Cafe24] 이미지 있는 상품: ${withImage}건`);
+        // 이미지 보유 수 확인 (로그용)
+        const countWithImg = parsedProductList.filter(p => p.detail_image || p.list_image).length;
+        console.log(`[Cafe24] 이미지 보유 상품: ${countWithImg}건`);
 
-        res.json({ success: true, count: cleanData.length, data: cleanData });
+        res.json({ success: true, count: parsedProductList.length, data: parsedProductList });
 
     } catch (error) {
         console.error('[Cafe24] API 오류:', error.response ? error.response.data : error.message);
@@ -1235,13 +1222,13 @@ app.get('/api/cafe24/products', async (req, res) => {
 
 
 // ==========================================
-// [추가] 디버깅용 API - 카페24 원본 응답 확인
+// [추가] 디버깅용 API - 카페24 원본 응답 확인 (변수명 변경)
 // ==========================================
 app.get('/api/cafe24/products/debug', async (req, res) => {
     try {
         const { keyword } = req.query;
 
-        const response = await apiRequest(
+        const debugResponse = await apiRequest(
             'GET',
             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
             null,
@@ -1251,15 +1238,14 @@ app.get('/api/cafe24/products/debug', async (req, res) => {
                 'display': 'T',
                 'selling': 'T',
                 'embed': 'options,images',
-                'limit': 3  // 테스트용으로 3개만
+                'limit': 3
             }
         );
 
-        // 원본 응답 그대로 반환 (디버깅용)
         res.json({
             success: true,
             message: '카페24 API 원본 응답 (디버깅용)',
-            raw_products: response.products
+            raw_products: debugResponse.products
         });
 
     } catch (error) {
@@ -1267,6 +1253,7 @@ app.get('/api/cafe24/products/debug', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
 
 // ==========================================
 // ★ [NEW] 오프라인 주문 관리 API (DB명: OFForder)
