@@ -1448,9 +1448,9 @@ app.delete('/api/orders/:id', async (req, res) => {
 // 0. [필수] 월(Month) 목록 조회 API (필터용) -> 이게 있어야 드롭다운이 나옴
 app.get('/api/months', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
+        const dbOffLine = mongoClient.db('off');
         // 'orders' 컬렉션에 있는 모든 month 값을 중복 없이 가져옴
-        const months = await dbOff.collection('orders').distinct('month');
+        const months = await dbOffLine.collection('orders').distinct('month');
         // 내림차순 정렬 (최신순)
         months.sort().reverse();
         res.json({ success: true, months });
@@ -1468,8 +1468,8 @@ const messageCollectionName = 'messages';
 // 게시글 목록 조회
 app.get('/api/messages', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // ★ off DB 사용
-        const collection = dbOff.collection(messageCollectionName);
+        const dbOffLine = mongoClient.db('off'); // ★ off DB 사용
+        const collection = dbOffLine.collection(messageCollectionName);
         
         const messages = await collection.find({}).sort({ createdAt: -1 }).toArray();
         const result = messages.map(m => ({ ...m, id: m._id }));
@@ -1483,8 +1483,8 @@ app.get('/api/messages', async (req, res) => {
 // 게시글 작성
 app.post('/api/messages', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection(messageCollectionName);
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection(messageCollectionName);
         const { store, week, manager, title, content, isGlobal, isStoreNotice } = req.body;
         
         const newMessage = {
@@ -1513,8 +1513,8 @@ app.post('/api/messages', async (req, res) => {
 // 게시글 삭제
 app.delete('/api/messages/:id', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection(messageCollectionName);
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection(messageCollectionName);
         const { id } = req.params;
         
         if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
@@ -1531,8 +1531,8 @@ app.delete('/api/messages/:id', async (req, res) => {
 // 댓글 작성
 app.post('/api/messages/:id/comments', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection(messageCollectionName);
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection(messageCollectionName);
         const { id } = req.params;
         const { manager, content } = req.body;
         
@@ -1570,8 +1570,8 @@ app.put('/api/messages/:id', async (req, res) => {
         }
 
         // ★ [핵심 수정] 'off' DB를 명시적으로 사용합니다.
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection('messages');
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection('messages');
 
         const result = await collection.updateOne(
             { _id: new ObjectId(id) }, 
@@ -1606,8 +1606,8 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
         }
 
         // ★ [핵심 수정] 'off' DB를 명시적으로 사용합니다.
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection('messages');
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection('messages');
 
         // 1차 시도: 댓글 ID를 '숫자'로 변환해서 찾아봄
         let result = await collection.updateOne(
@@ -1641,8 +1641,8 @@ app.put('/api/messages/:id/comments/:cmtId', async (req, res) => {
 // 댓글 삭제
 app.delete('/api/messages/:id/comments/:cmtId', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection(messageCollectionName);
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection(messageCollectionName);
         const { id, cmtId } = req.params;
         
         if (!ObjectId.isValid(id)) return res.status(400).json({ success: false });
@@ -1666,8 +1666,8 @@ const statsCollectionName = 'work_stats';
 // 근무시간 조회 (월별 필터링 추가)
 app.get('/api/stats', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection(statsCollectionName);
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection(statsCollectionName);
         
         // ★ [핵심] 클라이언트가 요청한 'month' 파라미터를 받음
         const { month } = req.query; 
@@ -1693,8 +1693,8 @@ app.get('/api/stats', async (req, res) => {
 // 근무시간 저장 (월 정보 추가 저장)
 app.post('/api/stats', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection(statsCollectionName);
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection(statsCollectionName);
         
         // ★ [핵심] body에서 month도 같이 받음
         const { week, name, hours, month } = req.body;
@@ -1718,8 +1718,8 @@ app.post('/api/stats', async (req, res) => {
 // ------------------------------------------
 app.get('/api/supporters', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // ★ off DB 사용
-        const collection = dbOff.collection('supporters');
+        const dbOffLine = mongoClient.db('off'); // ★ off DB 사용
+        const collection = dbOffLine.collection('supporters');
         
         const { store } = req.query;
         const query = store && store !== 'all' ? { store } : {};
@@ -1733,8 +1733,8 @@ app.get('/api/supporters', async (req, res) => {
 
 app.post('/api/supporters', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection('supporters');
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection('supporters');
         
         await collection.insertOne({ ...req.body, createdAt: new Date() });
         res.json({ success: true });
@@ -1745,8 +1745,8 @@ app.post('/api/supporters', async (req, res) => {
 
 app.put('/api/supporters/:id', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection('supporters');
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection('supporters');
         
         await collection.updateOne(
             { _id: new ObjectId(req.params.id) }, 
@@ -1760,8 +1760,8 @@ app.put('/api/supporters/:id', async (req, res) => {
 
 app.delete('/api/supporters/:id', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
-        const collection = dbOff.collection('supporters');
+        const dbOffLine = mongoClient.db('off');
+        const collection = dbOffLine.collection('supporters');
         
         await collection.deleteOne({ _id: new ObjectId(req.params.id) });
         res.json({ success: true });
@@ -1777,8 +1777,8 @@ app.delete('/api/supporters/:id', async (req, res) => {
 // 토큰 목록 조회 (팝업용 - 이게 없어서 4번째 스샷 에러 발생)
 app.get('/api/store-tokens', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); // ★ off DB 사용
-        const tokens = await dbOff.collection('store_tokens').find({}).toArray();
+        const dbOffLine = mongoClient.db('off'); // ★ off DB 사용
+        const tokens = await dbOffLine.collection('store_tokens').find({}).toArray();
         
         const map = {};
         tokens.forEach(t => { map[t.store] = t.token; });
@@ -1792,11 +1792,11 @@ app.get('/api/store-tokens', async (req, res) => {
 // 토큰 생성 (신규)
 app.post('/api/store-token', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
+        const dbOffLine = mongoClient.db('off');
         const { store } = req.body;
         const token = `store_${Math.random().toString(36).substring(2, 10)}`;
         
-        await dbOff.collection('store_tokens').updateOne(
+        await dbOffLine.collection('store_tokens').updateOne(
             { store },
             { $set: { token, createdAt: new Date() } },
             { upsert: true }
@@ -1810,10 +1810,10 @@ app.post('/api/store-token', async (req, res) => {
 // 토큰 검증 (접속용)
 app.get('/api/store-token/:token', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off');
+        const dbOffLine = mongoClient.db('off');
         const { token } = req.params;
         
-        const data = await dbOff.collection('store_tokens').findOne({ token });
+        const data = await dbOffLine.collection('store_tokens').findOne({ token });
         if (!data) return res.status(404).json({ success: false });
         
         res.json({ success: true, store: data.store });
@@ -1835,8 +1835,8 @@ app.get('/api/system/last-update', async (req, res) => {
         if (!meta) {
             console.log("⚠️ 현재 DB에 없음. 'off' DB에서 재검색 시도...");
             // ★ 핵심: client 변수 대신 db.client를 쓰면 에러가 안 납니다!
-            const dbOff = db.client.db('off'); 
-            meta = await dbOff.collection('system_metadata').findOne({ key: 'last_update_time' });
+            const dbOffLine = db.client.db('off'); 
+            meta = await dbOffLine.collection('system_metadata').findOne({ key: 'last_update_time' });
         }
 
         // 4. 결과 반환
@@ -2136,7 +2136,7 @@ app.post('/api/orders', async (req, res) => {
 // ==========================================
 app.get('/api/orders', async (req, res) => {
     try {
-        const dbOff = mongoClient.db('off'); 
+        const dbOffLine = mongoClient.db('off'); 
         const { month, store } = req.query; // store 파라미터도 받음
         
         // 1. 기준 월 설정 (없으면 현재 월)
@@ -2156,7 +2156,7 @@ app.get('/api/orders', async (req, res) => {
                 query.store = store;
             }
 
-            const result = await dbOff.collection('orders').aggregate([
+            const result = await dbOffLine.collection('orders').aggregate([
                 { $match: query },
                 { $group: { _id: null, total: { $sum: "$amount" } } }
             ]).toArray();
@@ -2182,7 +2182,7 @@ app.get('/api/orders', async (req, res) => {
             orderHasSet: 1, orderHasCover: 1
         };
 
-        const orders = await dbOff.collection('orders')
+        const orders = await dbOffLine.collection('orders')
             .find(listQuery)
             .project(projection)
             .toArray();
