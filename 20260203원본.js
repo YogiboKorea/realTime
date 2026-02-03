@@ -25,8 +25,8 @@ const PORT = 8014; // 8014 포트로 통일
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = 'UeY0l1RHDi5DRXWHdMamJH'; 
-let refreshToken = 'tDftgE64RaDY3CSojHvNeD'; 
+let accessToken = 'B6sxr1WrHxujGvWbteE2JB'; 
+let refreshToken = 'G9lX36tyIB8ne6WvVGLgjB'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -1089,8 +1089,9 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 });
 
 
+//오프라인 주문서 부분
 // ==========================================
-// ★★★ [수정됨] Cafe24 상품 검색 API (이미지 포함) ★★★
+// [API] Cafe24 상품 검색 (기존 유지)
 // ==========================================
 app.get('/api/cafe24/products', async (req, res) => {
     try {
@@ -1102,7 +1103,7 @@ app.get('/api/cafe24/products', async (req, res) => {
 
         console.log(`[Cafe24] 검색 시작: "${keyword}"`);
 
-        // ★★★ [핵심 수정] embed에 'images' 추가, fields 제거 ★★★
+        // 1. Cafe24 API 호출
         const response = await apiRequest(
             'GET',
             `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
@@ -1112,17 +1113,16 @@ app.get('/api/cafe24/products', async (req, res) => {
                 'product_name': keyword,
                 'display': 'T',
                 'selling': 'T',
-                'embed': 'options,images',  // ★ images 추가!
+                'embed': 'options',      // ★ 옵션 포함 요청
+                'fields': 'product_no,product_name,price,product_code,has_option,options',
                 'limit': 50
-                // fields 제거 - 이미지 필드가 포함되도록
             }
         );
 
-        const products = response.products || [];
+        const products = response.products;
 
-        // 데이터 정제 (이미지 URL 포함)
+        // 3. 데이터 정제
         const cleanData = products.map(item => {
-            // ========== 옵션 처리 (기존 코드 유지) ==========
             let myOptions = [];
             let rawOptionList = [];
 
@@ -1135,15 +1135,19 @@ app.get('/api/cafe24/products', async (req, res) => {
             }
 
             if (rawOptionList.length > 0) {
+                
+                // (A) '색상/Color/컬러' 이름이 있는 옵션을 찾음
                 let targetOption = rawOptionList.find(opt => {
                     const name = (opt.option_name || "").toLowerCase();
                     return name.includes('색상') || name.includes('color') || name.includes('컬러');
                 });
 
+                // (B) 못 찾았으면, 그냥 첫 번째 옵션을 사용
                 if (!targetOption && rawOptionList.length > 0) {
                     targetOption = rawOptionList[0];
                 }
 
+                // (C) 값 추출
                 if (targetOption && targetOption.option_value) {
                     myOptions = targetOption.option_value.map(val => ({
                         option_code: val.value_no || val.value_code || val.value, 
@@ -1152,63 +1156,20 @@ app.get('/api/cafe24/products', async (req, res) => {
                 }
             }
 
-            // ========== ★★★ [NEW] 이미지 URL 추출 ★★★ ==========
-            let detailImage = '';
-            let listImage = '';
-            let smallImage = '';
-
-            // 1. 기본 이미지 필드 체크
-            if (item.detail_image) {
-                detailImage = item.detail_image;
-            }
-            if (item.list_image) {
-                listImage = item.list_image;
-            }
-            if (item.small_image) {
-                smallImage = item.small_image;
-            }
-
-            // 2. images 배열에서 추가 이미지 확인 (embed=images 결과)
-            if (item.images && Array.isArray(item.images) && item.images.length > 0) {
-                const firstImage = item.images[0];
-                if (!detailImage && firstImage.big) {
-                    detailImage = firstImage.big;
-                }
-                if (!listImage && firstImage.medium) {
-                    listImage = firstImage.medium;
-                }
-                if (!smallImage && firstImage.small) {
-                    smallImage = firstImage.small;
-                }
-            }
-
-            // 3. 대체 이미지 필드 체크
-            if (!detailImage && item.product_image) {
-                detailImage = item.product_image;
-            }
-            if (!detailImage && item.image_url) {
-                detailImage = item.image_url;
+            // 옵션이 비어있다면 로그
+            if (myOptions.length === 0 && item.has_option === 'T') {
+                console.log(`⚠️ [옵션추출실패] 상품명: ${item.product_name}, 구조확인필요`);
             }
 
             return {
                 product_no: item.product_no,
                 product_name: item.product_name,
                 price: Math.floor(Number(item.price)),
-                options: myOptions,
-                
-                // ★★★ [NEW] 이미지 URL 추가 ★★★
-                detail_image: detailImage,
-                list_image: listImage,
-                small_image: smallImage
+                options: myOptions
             };
         });
 
         console.log(`[Cafe24] 검색 완료: ${cleanData.length}건 반환`);
-        
-        // 이미지 있는 상품 수 확인 (디버깅용)
-        const withImage = cleanData.filter(p => p.detail_image || p.list_image).length;
-        console.log(`[Cafe24] 이미지 있는 상품: ${withImage}건`);
-
         res.json({ success: true, count: cleanData.length, data: cleanData });
 
     } catch (error) {
@@ -1217,40 +1178,6 @@ app.get('/api/cafe24/products', async (req, res) => {
     }
 });
 
-
-// ==========================================
-// [추가] 디버깅용 API - 카페24 원본 응답 확인
-// ==========================================
-app.get('/api/cafe24/products/debug', async (req, res) => {
-    try {
-        const { keyword } = req.query;
-
-        const response = await apiRequest(
-            'GET',
-            `https://${MALLID}.cafe24api.com/api/v2/admin/products`,
-            null,
-            {
-                'shop_no': 1,
-                'product_name': keyword || '서포트',
-                'display': 'T',
-                'selling': 'T',
-                'embed': 'options,images',
-                'limit': 3  // 테스트용으로 3개만
-            }
-        );
-
-        // 원본 응답 그대로 반환 (디버깅용)
-        res.json({
-            success: true,
-            message: '카페24 API 원본 응답 (디버깅용)',
-            raw_products: response.products
-        });
-
-    } catch (error) {
-        console.error('[Debug] API 오류:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
 
 
 //MONGODB 에 저장된 데이터를 가져오기 오프라인 실시간 판매데이터및 주간 데이터를 가져오는 함수 추가
