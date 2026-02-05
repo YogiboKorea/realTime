@@ -1853,6 +1853,100 @@ app.get('/api/system/last-update', async (req, res) => {
     }
 });
 
+// [API] 매장별 매출 현황 및 좌수 집계 (대시보드용)
+app.get('/api/sales/dashboard', async (req, res) => {
+    try {
+        const { store } = req.query;
+        const dbOff = mongoClient.db('off');
+        
+        // 1. 날짜 설정
+        const now = moment().tz('Asia/Seoul');
+        const todayStr = now.format('YYYY-MM-DD');
+        const currentMonthStr = now.format('YYYY-MM');
+        const lastYearMonthStr = now.clone().subtract(1, 'year').format('YYYY-MM');
+
+        // 2. 쿼리 조건 설정
+        const storeQuery = store && store !== 'all' ? { store: store } : {};
+        
+        // [이번 달 데이터 가져오기]
+        const currentMonthOrders = await dbOff.collection('orders').find({
+            ...storeQuery,
+            month: currentMonthStr
+        }).toArray();
+
+        // [작년 동월 데이터 가져오기 (신장률 계산용)]
+        const lastYearOrders = await dbOff.collection('orders').find({
+            ...storeQuery,
+            month: lastYearMonthStr
+        }).toArray();
+
+        // 3. 데이터 집계
+        let todaySales = 0;
+        let monthSales = 0;
+        let lastYearSales = 0;
+        
+        // 매니저별 좌수(판매수량) 집계 맵
+        const managerJwasuMap = {};
+
+        // 이번달 데이터 루프
+        currentMonthOrders.forEach(order => {
+            // 금일 매출 합산
+            if (order.date === todayStr) {
+                todaySales += (order.amount || 0);
+            }
+            // 월 누계 합산
+            monthSales += (order.amount || 0);
+
+            // 좌수(판매수량) 집계 (매니저별)
+            const mgr = order.manager || '미지정';
+            if (!managerJwasuMap[mgr]) managerJwasuMap[mgr] = 0;
+            // *좌수 기준: 수량(qty) 합계로 가정 (건수라면 1을 더하세요)
+            managerJwasuMap[mgr] += (order.qty || 0);
+        });
+
+        // 작년 매출 합산
+        lastYearOrders.forEach(order => {
+            lastYearSales += (order.amount || 0);
+        });
+
+        // 4. 계산 (목표/달성률/신장률)
+        // *목표 금액은 DB에 'targets' 컬렉션을 따로 만들거나 하드코딩 해야 함. 
+        // *일단 예시로 5,000만원 설정 (필요시 DB 연동 수정 가능)
+        const targetAmount = 50000000; 
+        
+        const achievementRate = targetAmount > 0 ? ((monthSales / targetAmount) * 100).toFixed(1) : 0;
+        
+        // 신장률: (금년 - 작년) / 작년 * 100
+        let growthRate = 0;
+        if (lastYearSales > 0) {
+            growthRate = ((monthSales - lastYearSales) / lastYearSales * 100).toFixed(1);
+        } else if (monthSales > 0) {
+            growthRate = 100; // 작년 0원인데 올해 매출 있으면 100% 성장 처리
+        }
+
+        // 5. 좌수 문자열 포맷팅 (예: "홍길동/14, 김철수/12")
+        const jwasuList = Object.entries(managerJwasuMap)
+            .sort(([, a], [, b]) => b - a) // 판매량 높은 순 정렬
+            .map(([name, count]) => `${name}/${count}`)
+            .join(', ');
+
+        res.json({
+            success: true,
+            data: {
+                targetAmount: targetAmount,
+                todaySales: todaySales,
+                monthSales: monthSales,
+                achievementRate: achievementRate,
+                growthRate: growthRate,
+                jwasuString: jwasuList || '데이터 없음'
+            }
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: '집계 실패' });
+    }
+});
 
 
 
