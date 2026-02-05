@@ -45,103 +45,161 @@ const mongoClient = new MongoClient(mongoUri, {
 });
 let db; // 전역 DB 객체
 
+// ========== [3] 토큰 관리 함수 (핵심 수정됨) ==========
 
-// MongoDB에서 토큰 읽기
+// A. DB에서 토큰 불러오기
 async function getTokensFromDB() {
-    try {
-        const collection = db.collection(tokenCollectionName);
-        const tokens = await collection.findOne({ name: 'tokens' });
-        if (tokens) {
-            accessToken = tokens.accessToken;
-            refreshToken = tokens.refreshToken;
-            console.log('MongoDB에서 토큰 로드 성공');
-        } else {
-            console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용.');
-        }
-    } catch (error) {
-        console.error('getTokensFromDB 오류:', error);
+  const client = new MongoClient(MONGODB_URI);
+  try {
+    await client.connect();
+    const db = client.db(DB_NAME);
+    const collection = db.collection(tokenCollectionName);
+    const tokensDoc = await collection.findOne({});
+    if (tokensDoc) {
+      accessToken = tokensDoc.accessToken;
+      refreshToken = tokensDoc.refreshToken;
+      console.log('✅ [System] MongoDB에서 토큰 로드 완료');
+    } else {
+      console.log('⚠️ [System] 저장된 토큰 없음. 초기 토큰 저장 필요.');
     }
+  } catch (error) {
+    console.error('❌ 토큰 로드 오류:', error);
+  } finally {
+    await client.close();
+  }
 }
 
-// MongoDB에 토큰 저장
+// B. DB에 토큰 저장하기
 async function saveTokensToDB(newAccessToken, newRefreshToken) {
-    try {
-        const collection = db.collection(tokenCollectionName);
-        await collection.updateOne(
-            { name: 'tokens' },
-            {
-                $set: {
-                    name: 'tokens',
-                    accessToken: newAccessToken,
-                    refreshToken: newRefreshToken,
-                    updatedAt: new Date(),
-                },
-            },
-            { upsert: true }
-        );
-        console.log('MongoDB에 토큰 저장 완료');
-    } catch (error) {
-        console.error('saveTokensToDB 오류:', error);
-    }
+  const client = new MongoClient(MONGODB_URI);
+  try {
+    await client.connect();
+    const db = client.db(DB_NAME);
+    const collection = db.collection(tokenCollectionName);
+    await collection.updateOne(
+      {},
+      {
+        $set: {
+          accessToken: newAccessToken,
+          refreshToken: newRefreshToken,
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+    console.log('✅ [System] 새 토큰 DB 저장 완료');
+  } catch (error) {
+    console.error('❌ 토큰 저장 오류:', error);
+  } finally {
+    await client.close();
+  }
 }
 
-// Access Token 및 Refresh Token 갱신 함수
-async function refreshAccessToken() {
+// C. ★ [신규] Cafe24 OAuth 서버에 실제 토큰 갱신 요청
+async function requestCafe24TokenRefresh() {
+    const authHeader = Buffer.from(`${CAFE24_CLIENT_ID}:${CAFE24_CLIENT_SECRET}`).toString('base64');
     try {
-        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-        const response = await axios.post(
-            `https://${MALLID}.cafe24api.com/api/v2/oauth/token`,
+        console.log('🔄 [Auth] Cafe24 서버에 토큰 갱신 요청 중...');
+        const response = await axios.post('https://auth.cafe24api.com/api/v2/oauth/token',
             `grant_type=refresh_token&refresh_token=${refreshToken}`,
             {
                 headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': `Basic ${basicAuth}`,
-                },
+                    'Authorization': `Basic ${authHeader}`,
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
             }
         );
-        const newAccessToken = response.data.access_token;
-        const newRefreshToken = response.data.refresh_token;
-        console.log('Access Token 갱신 성공');
-        await saveTokensToDB(newAccessToken, newRefreshToken);
-        accessToken = newAccessToken; 
-        refreshToken = newRefreshToken; 
-        return newAccessToken;
+        return response.data; // { access_token, refresh_token, ... }
     } catch (error) {
-        if (error.response?.data?.error === 'invalid_grant') {
-            console.error('Refresh Token이 만료되었습니다. 인증 단계를 다시 수행해야 합니다.');
-        } else {
-            console.error('Access Token 갱신 실패:', error.response ? error.response.data : error.message);
-        }
-        throw error;
+        console.error('❌ [Auth] Cafe24 토큰 갱신 실패:', error.response ? error.response.data : error.message);
+        throw error; // 갱신 실패 시 에러 던짐
     }
 }
 
-// API 요청 함수 (토큰 만료 시 자동 갱신)
+// D. 토큰 갱신 통합 함수 (요청 -> 변수업데이트 -> DB저장)
+async function refreshAccessToken() {
+  try {
+      const newTokens = await requestCafe24TokenRefresh();
+      
+      // 전역 변수 업데이트
+      accessToken = newTokens.access_token;
+      refreshToken = newTokens.refresh_token;
+      
+      // DB 저장
+      await saveTokensToDB(accessToken, refreshToken);
+      
+      console.log('✨ [Auth] 토큰 갱신 프로세스 완료');
+      return accessToken;
+  } catch (error) {
+      console.error('🚨 [Critical] 토큰 갱신 불가. 관리자 확인 요망.');
+      throw error;
+  }
+}
+
+// ========== [4] Cafe24 API 요청 함수 (재시도 로직 개선) ==========
+async function apiRequest(method, url, data = {}, params = {}, retryCount = 0) {
+  // console.log(`Request: ${method} ${url}`);
+  try {
+    const response = await axios({
+      method,
+      url,
+      data,
+      params,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'X-Cafe24-Api-Version': CAFE24_API_VERSION
+      },
+    });
+    return response.data;
+  } catch (error) {
+    // 401 에러이고, 재시도 횟수가 0일 때만 갱신 시도 (무한 루프 방지)
+    if (error.response && error.response.status === 401 && retryCount < 1) {
+      console.log(`⚠️ [API] 401 토큰 만료됨. 갱신 후 재시도 (Count: ${retryCount + 1})`);
+      try {
+          await refreshAccessToken(); // 실제 갱신 수행
+          return await apiRequest(method, url, data, params, retryCount + 1); // 재귀 호출
+      } catch (refreshErr) {
+          console.error('❌ 재시도 실패: 토큰 갱신 오류');
+          throw refreshErr;
+      }
+    } else {
+      // 그 외 에러는 바로 던짐
+      console.error('❌ [API] 요청 오류:', error.response ? error.response.data : error.message);
+      throw error;
+    }
+  }
+}
+
+// ========== [4] Cafe24 API 요청 함수 ==========
 async function apiRequest(method, url, data = {}, params = {}) {
-    try {
-        const response = await axios({
-            method,
-            url,
-            data,
-            params,
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-            },
-        });
-        return response.data;
-    } catch (error) {
-        if (error.response?.status === 401) {
-            console.log('Access Token 만료. 갱신 중...');
-            await refreshAccessToken(); 
-            return apiRequest(method, url, data, params); 
-        } else {
-            console.error('API 요청 오류:', error.response ? error.response.data : error.message);
-            throw error;
-        }
+  console.log(`Request: ${method} ${url}`);
+  console.log("Params:", params);
+  console.log("Data:", data);
+  try {
+    const response = await axios({
+      method,
+      url,
+      data,
+      params,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'X-Cafe24-Api-Version': CAFE24_API_VERSION
+      },
+    });
+    return response.data;
+  } catch (error) {
+    if (error.response && error.response.status === 401) {
+      console.log('Access Token 만료. 갱신 중...');
+      await refreshAccessToken();
+      return apiRequest(method, url, data, params);
+    } else {
+      console.error('API 요청 오류:', error.response ? error.response.data : error.message);
+      throw error;
     }
+  }
 }
-
 
 
 // ==========================================
@@ -1085,84 +1143,6 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
     } catch (error) {
         console.error('매니저 매출 엑셀 업로드 오류:', error);
         res.status(500).json({ success: false, message: '매출 업로드 중 오류 발생' });
-    }
-});
-
-// ==========================================
-// [신규] 대시보드 및 일일 마감 보고서용 데이터 API
-// ==========================================
-app.get('/api/sales/dashboard', async (req, res) => {
-    try {
-        const { store } = req.query;
-        const dbOff = mongoClient.db('off');
-        
-        // 1. 날짜 설정 (오늘, 이번 달, 작년 동월)
-        const now = moment().tz('Asia/Seoul');
-        const todayStr = now.format('YYYY-MM-DD');
-        const currentMonthStr = now.format('YYYY-MM');
-        
-        // 2. 쿼리 조건
-        const query = { month: currentMonthStr };
-        if (store && store !== 'all') query.store = store;
-
-        // 3. 데이터 조회
-        const orders = await dbOff.collection('orders').find(query).toArray();
-        
-        // 4. 집계 시작
-        let todaySales = 0;
-        let monthSales = 0;
-        const managerCounts = {}; // 매니저별 판매 수량 (좌수)
-
-        orders.forEach(o => {
-            const amt = Number(o.amount) || 0;
-            const qty = Number(o.qty) || 0;
-            
-            // 월 누적 매출
-            monthSales += amt;
-
-            // 금일 매출
-            if (o.date === todayStr) {
-                todaySales += amt;
-            }
-
-            // 좌수 집계 (이름/수량)
-            // 오늘 날짜 기준인지, 월 기준인지에 따라 다름. 
-            // 보통 마감보고는 '금일 좌수'를 의미하므로 오늘 날짜만 집계
-            if (o.date === todayStr) {
-                const name = (o.manager || '미지정').split(' ')[0]; // 이름만 추출
-                if (!managerCounts[name]) managerCounts[name] = 0;
-                managerCounts[name] += qty;
-            }
-        });
-
-        // 5. 목표 금액 (임시 로직: 기존 통계에서 가져오거나 설정된 값)
-        // 실제로는 별도 목표 설정 컬렉션이 필요하지만, 여기선 예시로 월 매출의 1.2배를 목표로 가정하거나 0으로 둡니다.
-        // 프론트엔드에서 계산된 값을 쓸 것이므로 여기선 기본값 전송
-        const targetAmount = 0; 
-        const achievementRate = 0;
-        const growthRate = 0; // 전년 대비는 별도 쿼리가 필요하여 일단 0 처리 (프론트에서 계산 가능하면 생략)
-
-        // 6. 좌수 문자열 만들기
-        const jwasuList = Object.entries(managerCounts)
-            .map(([name, count]) => `${name}/${count}`)
-            .join(', ');
-
-        res.json({
-            success: true,
-            data: {
-                targetAmount,    // 프론트에서 덮어씌울 예정
-                todaySales,
-                monthSales,
-                achievementRate, // 프론트에서 계산
-                growthRate,      // 프론트에서 계산
-                jwasuString: jwasuList || '데이터 없음',
-                managerCounts // 0명 처리를 위해 객체도 같이 전송
-            }
-        });
-
-    } catch (err) {
-        console.error("대시보드 API 에러:", err);
-        res.status(500).json({ success: false, message: '서버 에러' });
     }
 });
 
