@@ -14,7 +14,6 @@ const fs = require('fs');
 const path = require('path');
 
 
-
 // --- 2. Express 앱 및 포트 설정 ---
 const app = express();
 app.use(cors());
@@ -25,8 +24,8 @@ const PORT = 8014; // 8014 포트로 통일
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = 'DW8yk9EnN5chLT2Tc2ozmC'; 
-let refreshToken = 'oCEbpedaLaAAZL13ptyBOD'; 
+let accessToken = '8TfkhmmxEyNaTGaaGTE3aA'; 
+let refreshToken = 'hCT4o8AwJNIshjyDAn8gcA'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -49,7 +48,7 @@ let db; // 전역 DB 객체
 
 // A. DB에서 토큰 불러오기
 async function getTokensFromDB() {
-  const client = new MongoClient(MONGODB_URI);
+  const client = new MongoClient(MONGO_URI);
   try {
     await client.connect();
     const db = client.db(DB_NAME);
@@ -71,7 +70,7 @@ async function getTokensFromDB() {
 
 // B. DB에 토큰 저장하기
 async function saveTokensToDB(newAccessToken, newRefreshToken) {
-  const client = new MongoClient(MONGODB_URI);
+  const client = new MongoClient(MONGO_URI);
   try {
     await client.connect();
     const db = client.db(DB_NAME);
