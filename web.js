@@ -2305,7 +2305,7 @@ mongoClient.connect()
             console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
             
             // 랭킹 서버 초기화 로직 (Cafe24)
-            await getTokensFromDB(); // DB에서 토큰 로드
+            //await getTokensFromDB(); // DB에서 토큰 로드
 
             // 스케줄: 매 시간 정각에 토큰 갱신
             schedule.scheduleJob('0 * * * *', async () => {
