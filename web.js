@@ -1090,7 +1090,48 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 
 
+// ==========================================
+// [추가] 매장명 일괄 수정 및 삭제 API
+// ==========================================
 
+// 1. 매장명 일괄 변경 (Renaming)
+// 기존 매장명(oldName)을 가진 모든 매니저의 storeName을 newName으로 변경
+app.put('/api/jwasu/admin/store/rename', async (req, res) => {
+    try {
+        const { oldName, newName } = req.body;
+        if (!oldName || !newName) return res.status(400).json({ success: false, message: '매장명이 필요합니다.' });
+
+        // jwasu_managers 컬렉션 업데이트
+        const result = await db.collection(staffCollectionName).updateMany(
+            { storeName: oldName },
+            { $set: { storeName: newName, lastUpdated: new Date() } }
+        );
+
+        // (선택사항) 좌수 기록(offline_jwasu)이나 매출 기록(manager_salesNew)도 같이 업데이트 하려면 여기서 추가 updateMany를 실행하면 됩니다.
+        // 현재는 매니저 관리 기준이므로 매니저 정보만 변경합니다.
+
+        res.json({ success: true, message: `${result.modifiedCount}명의 매니저 매장 정보가 변경되었습니다.` });
+    } catch (error) {
+        console.error('매장명 변경 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
+
+// 2. 매장 일괄 삭제 (Delete All Managers in Store)
+// 해당 매장에 속한 매니저를 전부 삭제합니다.
+app.delete('/api/jwasu/admin/store', async (req, res) => {
+    try {
+        const { storeName } = req.body; // DELETE는 body 사용 시 주의, 혹은 query로 받아도 됨. 여기선 body 사용
+        if (!storeName) return res.status(400).json({ success: false, message: '매장명이 필요합니다.' });
+
+        const result = await db.collection(staffCollectionName).deleteMany({ storeName: storeName });
+
+        res.json({ success: true, message: `${storeName} 소속 매니저 ${result.deletedCount}명이 삭제되었습니다.` });
+    } catch (error) {
+        console.error('매장 삭제 오류:', error);
+        res.status(500).json({ success: false, message: '서버 오류 발생' });
+    }
+});
 
 
 
