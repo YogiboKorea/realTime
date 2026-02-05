@@ -50,7 +50,7 @@ let db; // 전역 DB 객체
 async function getTokensFromDB() {
     try {
         const collection = db.collection(tokenCollectionName);
-        const tokens = await collection.findOne({ name: 'cafe24Tokens' });
+        const tokens = await collection.findOne({ name: 'tokens' });
         if (tokens) {
             accessToken = tokens.accessToken;
             refreshToken = tokens.refreshToken;
