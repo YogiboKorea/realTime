@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 
+
 // --- 2. Express 앱 및 포트 설정 ---
 const app = express();
 app.use(cors());
@@ -24,8 +25,8 @@ const PORT = 8014; // 8014 포트로 통일
 // --- 3. 전역 변수 및 .env 설정 ---
 
 // Cafe24 API 및 랭킹 관련
-let accessToken = '8TfkhmmxEyNaTGaaGTE3aA'; 
-let refreshToken = 'hCT4o8AwJNIshjyDAn8gcA'; 
+let accessToken = 'DW8yk9EnN5chLT2Tc2ozmC'; 
+let refreshToken = 'oCEbpedaLaAAZL13ptyBOD'; 
 
 const clientId = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
@@ -44,161 +45,103 @@ const mongoClient = new MongoClient(mongoUri, {
 });
 let db; // 전역 DB 객체
 
-// ========== [3] 토큰 관리 함수 (핵심 수정됨) ==========
 
-// A. DB에서 토큰 불러오기
-async function getTokensFromDB() {
-  const client = new MongoClient(MONGO_URI);
-  try {
-    await client.connect();
-    const db = client.db(DB_NAME);
-    const collection = db.collection(tokenCollectionName);
-    const tokensDoc = await collection.findOne({});
-    if (tokensDoc) {
-      accessToken = tokensDoc.accessToken;
-      refreshToken = tokensDoc.refreshToken;
-      console.log('✅ [System] MongoDB에서 토큰 로드 완료');
-    } else {
-      console.log('⚠️ [System] 저장된 토큰 없음. 초기 토큰 저장 필요.');
-    }
-  } catch (error) {
-    console.error('❌ 토큰 로드 오류:', error);
-  } finally {
-    await client.close();
-  }
-}
+// // MongoDB에서 토큰 읽기
+// async function getTokensFromDB() {
+//     try {
+//         const collection = db.collection(tokenCollectionName);
+//         const tokens = await collection.findOne({ name: 'tokens' });
+//         if (tokens) {
+//             accessToken = tokens.accessToken;
+//             refreshToken = tokens.refreshToken;
+//             console.log('MongoDB에서 토큰 로드 성공');
+//         } else {
+//             console.log('MongoDB에 저장된 토큰이 없습니다. 초기값 사용.');
+//         }
+//     } catch (error) {
+//         console.error('getTokensFromDB 오류:', error);
+//     }
+// }
 
-// B. DB에 토큰 저장하기
-async function saveTokensToDB(newAccessToken, newRefreshToken) {
-  const client = new MongoClient(MONGO_URI);
-  try {
-    await client.connect();
-    const db = client.db(DB_NAME);
-    const collection = db.collection(tokenCollectionName);
-    await collection.updateOne(
-      {},
-      {
-        $set: {
-          accessToken: newAccessToken,
-          refreshToken: newRefreshToken,
-          updatedAt: new Date(),
-        },
-      },
-      { upsert: true }
-    );
-    console.log('✅ [System] 새 토큰 DB 저장 완료');
-  } catch (error) {
-    console.error('❌ 토큰 저장 오류:', error);
-  } finally {
-    await client.close();
-  }
-}
+// // MongoDB에 토큰 저장
+// async function saveTokensToDB(newAccessToken, newRefreshToken) {
+//     try {
+//         const collection = db.collection(tokenCollectionName);
+//         await collection.updateOne(
+//             { name: 'cafe24Tokens' },
+//             {
+//                 $set: {
+//                     name: 'cafe24Tokens',
+//                     accessToken: newAccessToken,
+//                     refreshToken: newRefreshToken,
+//                     updatedAt: new Date(),
+//                 },
+//             },
+//             { upsert: true }
+//         );
+//         console.log('MongoDB에 토큰 저장 완료');
+//     } catch (error) {
+//         console.error('saveTokensToDB 오류:', error);
+//     }
+// }
 
-// C. ★ [신규] Cafe24 OAuth 서버에 실제 토큰 갱신 요청
-async function requestCafe24TokenRefresh() {
-    const authHeader = Buffer.from(`${CAFE24_CLIENT_ID}:${CAFE24_CLIENT_SECRET}`).toString('base64');
-    try {
-        console.log('🔄 [Auth] Cafe24 서버에 토큰 갱신 요청 중...');
-        const response = await axios.post('https://auth.cafe24api.com/api/v2/oauth/token',
-            `grant_type=refresh_token&refresh_token=${refreshToken}`,
-            {
-                headers: {
-                    'Authorization': `Basic ${authHeader}`,
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                }
-            }
-        );
-        return response.data; // { access_token, refresh_token, ... }
-    } catch (error) {
-        console.error('❌ [Auth] Cafe24 토큰 갱신 실패:', error.response ? error.response.data : error.message);
-        throw error; // 갱신 실패 시 에러 던짐
-    }
-}
+// // Access Token 및 Refresh Token 갱신 함수
+// async function refreshAccessToken() {
+//     try {
+//         const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+//         const response = await axios.post(
+//             `https://${MALLID}.cafe24api.com/api/v2/oauth/token`,
+//             `grant_type=refresh_token&refresh_token=${refreshToken}`,
+//             {
+//                 headers: {
+//                     'Content-Type': 'application/x-www-form-urlencoded',
+//                     'Authorization': `Basic ${basicAuth}`,
+//                 },
+//             }
+//         );
+//         const newAccessToken = response.data.access_token;
+//         const newRefreshToken = response.data.refresh_token;
+//         console.log('Access Token 갱신 성공');
+//         await saveTokensToDB(newAccessToken, newRefreshToken);
+//         accessToken = newAccessToken; 
+//         refreshToken = newRefreshToken; 
+//         return newAccessToken;
+//     } catch (error) {
+//         if (error.response?.data?.error === 'invalid_grant') {
+//             console.error('Refresh Token이 만료되었습니다. 인증 단계를 다시 수행해야 합니다.');
+//         } else {
+//             console.error('Access Token 갱신 실패:', error.response ? error.response.data : error.message);
+//         }
+//         throw error;
+//     }
+// }
 
-// D. 토큰 갱신 통합 함수 (요청 -> 변수업데이트 -> DB저장)
-async function refreshAccessToken() {
-  try {
-      const newTokens = await requestCafe24TokenRefresh();
-      
-      // 전역 변수 업데이트
-      accessToken = newTokens.access_token;
-      refreshToken = newTokens.refresh_token;
-      
-      // DB 저장
-      await saveTokensToDB(accessToken, refreshToken);
-      
-      console.log('✨ [Auth] 토큰 갱신 프로세스 완료');
-      return accessToken;
-  } catch (error) {
-      console.error('🚨 [Critical] 토큰 갱신 불가. 관리자 확인 요망.');
-      throw error;
-  }
-}
+// // API 요청 함수 (토큰 만료 시 자동 갱신)
+// async function apiRequest(method, url, data = {}, params = {}) {
+//     try {
+//         const response = await axios({
+//             method,
+//             url,
+//             data,
+//             params,
+//             headers: {
+//                 Authorization: `Bearer ${accessToken}`,
+//                 'Content-Type': 'application/json',
+//             },
+//         });
+//         return response.data;
+//     } catch (error) {
+//         if (error.response?.status === 401) {
+//             console.log('Access Token 만료. 갱신 중...');
+//             await refreshAccessToken(); 
+//             return apiRequest(method, url, data, params); 
+//         } else {
+//             console.error('API 요청 오류:', error.response ? error.response.data : error.message);
+//             throw error;
+//         }
+//     }
+// }
 
-// ========== [4] Cafe24 API 요청 함수 (재시도 로직 개선) ==========
-async function apiRequest(method, url, data = {}, params = {}, retryCount = 0) {
-  // console.log(`Request: ${method} ${url}`);
-  try {
-    const response = await axios({
-      method,
-      url,
-      data,
-      params,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'X-Cafe24-Api-Version': CAFE24_API_VERSION
-      },
-    });
-    return response.data;
-  } catch (error) {
-    // 401 에러이고, 재시도 횟수가 0일 때만 갱신 시도 (무한 루프 방지)
-    if (error.response && error.response.status === 401 && retryCount < 1) {
-      console.log(`⚠️ [API] 401 토큰 만료됨. 갱신 후 재시도 (Count: ${retryCount + 1})`);
-      try {
-          await refreshAccessToken(); // 실제 갱신 수행
-          return await apiRequest(method, url, data, params, retryCount + 1); // 재귀 호출
-      } catch (refreshErr) {
-          console.error('❌ 재시도 실패: 토큰 갱신 오류');
-          throw refreshErr;
-      }
-    } else {
-      // 그 외 에러는 바로 던짐
-      console.error('❌ [API] 요청 오류:', error.response ? error.response.data : error.message);
-      throw error;
-    }
-  }
-}
-
-// ========== [4] Cafe24 API 요청 함수 ==========
-async function apiRequest(method, url, data = {}, params = {}) {
-  console.log(`Request: ${method} ${url}`);
-  console.log("Params:", params);
-  console.log("Data:", data);
-  try {
-    const response = await axios({
-      method,
-      url,
-      data,
-      params,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'X-Cafe24-Api-Version': CAFE24_API_VERSION
-      },
-    });
-    return response.data;
-  } catch (error) {
-    if (error.response && error.response.status === 401) {
-      console.log('Access Token 만료. 갱신 중...');
-      await refreshAccessToken();
-      return apiRequest(method, url, data, params);
-    } else {
-      console.error('API 요청 오류:', error.response ? error.response.data : error.message);
-      throw error;
-    }
-  }
-}
 
 
 // ==========================================
