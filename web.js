@@ -796,16 +796,45 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
     }
 });
 
-// ==========================================
-// [섹션 E] 관리자 API (매니저 관리)
-// ==========================================
+// [수정] 매니저 목록 조회 (시스템용 더미 데이터 숨김 처리)
 app.get('/api/jwasu/admin/managers', async (req, res) => {
     try {
-        const managers = await db.collection(staffCollectionName).find().sort({ storeName: 1, managerName: 1 }).toArray();
+        // isHidden이 true가 아닌 것만 가져오기
+        const managers = await db.collection(staffCollectionName)
+                                 .find({ isHidden: { $ne: true } }) 
+                                 .sort({ storeName: 1, managerName: 1 })
+                                 .toArray();
         res.json({ success: true, managers });
     } catch (error) { res.status(500).json({ success: false }); }
 });
+// [추가] 매장만 단독 등록 (플레이스홀더 생성)
+app.post('/api/jwasu/admin/store', async (req, res) => {
+    try {
+        const { storeName } = req.body;
+        if (!storeName) return res.status(400).json({ success: false, message: '매장명이 필요합니다.' });
 
+        // 이미 해당 매장명이 존재하는지 체크 (매니저가 있든, 더미가 있든)
+        const exists = await db.collection(staffCollectionName).findOne({ storeName: storeName });
+        if (exists) {
+            return res.status(400).json({ success: false, message: '이미 존재하는 매장입니다.' });
+        }
+
+        // 매장 유지를 위한 '투명 인간(Placeholder)' 생성
+        await db.collection(staffCollectionName).insertOne({
+            storeName: storeName,
+            managerName: "system_store_placeholder", // 식별용 이름
+            role: "system",
+            isHidden: true,  // ★ 매니저 목록에서 안 보이게 숨김 처리
+            isActive: false, // 비활성화
+            createdAt: new Date()
+        });
+
+        res.json({ success: true, message: '매장이 등록되었습니다.' });
+    } catch (error) {
+        console.error("매장 등록 오류:", error);
+        res.status(500).json({ success: false, message: '서버 오류' });
+    }
+});
 app.post('/api/jwasu/admin/manager', async (req, res) => {
     try {
         const { storeName, managerName, role, consignment, targetCount, targetMonthlySales, targetWeeklySales, isActive } = req.body;
