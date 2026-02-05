@@ -1088,6 +1088,84 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
     }
 });
 
+// ==========================================
+// [신규] 대시보드 및 일일 마감 보고서용 데이터 API
+// ==========================================
+app.get('/api/sales/dashboard', async (req, res) => {
+    try {
+        const { store } = req.query;
+        const dbOff = mongoClient.db('off');
+        
+        // 1. 날짜 설정 (오늘, 이번 달, 작년 동월)
+        const now = moment().tz('Asia/Seoul');
+        const todayStr = now.format('YYYY-MM-DD');
+        const currentMonthStr = now.format('YYYY-MM');
+        
+        // 2. 쿼리 조건
+        const query = { month: currentMonthStr };
+        if (store && store !== 'all') query.store = store;
+
+        // 3. 데이터 조회
+        const orders = await dbOff.collection('orders').find(query).toArray();
+        
+        // 4. 집계 시작
+        let todaySales = 0;
+        let monthSales = 0;
+        const managerCounts = {}; // 매니저별 판매 수량 (좌수)
+
+        orders.forEach(o => {
+            const amt = Number(o.amount) || 0;
+            const qty = Number(o.qty) || 0;
+            
+            // 월 누적 매출
+            monthSales += amt;
+
+            // 금일 매출
+            if (o.date === todayStr) {
+                todaySales += amt;
+            }
+
+            // 좌수 집계 (이름/수량)
+            // 오늘 날짜 기준인지, 월 기준인지에 따라 다름. 
+            // 보통 마감보고는 '금일 좌수'를 의미하므로 오늘 날짜만 집계
+            if (o.date === todayStr) {
+                const name = (o.manager || '미지정').split(' ')[0]; // 이름만 추출
+                if (!managerCounts[name]) managerCounts[name] = 0;
+                managerCounts[name] += qty;
+            }
+        });
+
+        // 5. 목표 금액 (임시 로직: 기존 통계에서 가져오거나 설정된 값)
+        // 실제로는 별도 목표 설정 컬렉션이 필요하지만, 여기선 예시로 월 매출의 1.2배를 목표로 가정하거나 0으로 둡니다.
+        // 프론트엔드에서 계산된 값을 쓸 것이므로 여기선 기본값 전송
+        const targetAmount = 0; 
+        const achievementRate = 0;
+        const growthRate = 0; // 전년 대비는 별도 쿼리가 필요하여 일단 0 처리 (프론트에서 계산 가능하면 생략)
+
+        // 6. 좌수 문자열 만들기
+        const jwasuList = Object.entries(managerCounts)
+            .map(([name, count]) => `${name}/${count}`)
+            .join(', ');
+
+        res.json({
+            success: true,
+            data: {
+                targetAmount,    // 프론트에서 덮어씌울 예정
+                todaySales,
+                monthSales,
+                achievementRate, // 프론트에서 계산
+                growthRate,      // 프론트에서 계산
+                jwasuString: jwasuList || '데이터 없음',
+                managerCounts // 0명 처리를 위해 객체도 같이 전송
+            }
+        });
+
+    } catch (err) {
+        console.error("대시보드 API 에러:", err);
+        res.status(500).json({ success: false, message: '서버 에러' });
+    }
+});
+
 
 
 
