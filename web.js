@@ -1116,45 +1116,57 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
         res.status(500).json({ success: false, message: '매출 업로드 중 오류 발생' });
     }
 });
-
 // ==========================================
-// [추가] 매장별 매출 목표 조회 (기존 데이터 백업 로직 포함)
+// [필수 추가] 매장 매출 목표 저장하기 (이게 있어야 저장이 됩니다!)
 // ==========================================
-app.get('/api/jwasu/admin/store-target', async (req, res) => {
+app.post('/api/jwasu/admin/store-target', async (req, res) => {
     try {
-        const { month, storeName } = req.query;
-        if (!month || !storeName) return res.status(400).json({ success: false });
+        const { month, storeName, targetMonthlySales, targetWeeklySales } = req.body;
 
-        // 1. 우선 '매장 공통 설정값(system_store_placeholder)'이 있는지 확인 (신규 방식)
-        let target = await db.collection(monthlyTargetCollection).findOne({
-            month: month, 
-            storeName: storeName, 
-            managerName: "system_store_placeholder"
-        });
+        if (!month || !storeName) return res.status(400).json({ success: false, message: '정보 부족' });
 
-        // 2. [핵심] 공통 설정값이 없다면? -> 기존 데이터 중에서 '매출 목표가 있는' 기록을 찾아옴
-        // (예전에 특정 매니저 이름으로 저장해둔 데이터를 찾아내는 로직)
-        if (!target) {
-            target = await db.collection(monthlyTargetCollection).findOne({
-                month: month, 
-                storeName: storeName,
-                $or: [
-                    { targetMonthlySales: { $gt: 0 } },      // 월 매출이 0보다 크거나
-                    { "targetWeeklySales.w1": { $gt: 0 } }   // 1주차 매출이 0보다 큰 기록
-                ]
-            });
+        // 주간 데이터 숫자 변환 (안전장치)
+        let weeklyData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+        if (targetWeeklySales) {
+            weeklyData.w1 = parseInt(targetWeeklySales.w1) || 0;
+            weeklyData.w2 = parseInt(targetWeeklySales.w2) || 0;
+            weeklyData.w3 = parseInt(targetWeeklySales.w3) || 0;
+            weeklyData.w4 = parseInt(targetWeeklySales.w4) || 0;
+            weeklyData.w5 = parseInt(targetWeeklySales.w5) || 0;
         }
 
-        // 찾은 데이터가 있으면 반환, 없으면 빈 객체
-        res.json({ success: true, data: target || {} });
+        // 1. 기존 매니저들의 목표 데이터 업데이트
+        await db.collection(monthlyTargetCollection).updateMany(
+            { month: month, storeName: storeName },
+            { 
+                $set: { 
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
+                    targetWeeklySales: weeklyData,
+                    updatedAt: new Date()
+                } 
+            }
+        );
+
+        // 2. 매장 공통 데이터(PlaceHolder) 생성 또는 업데이트
+        await db.collection(monthlyTargetCollection).updateOne(
+            { month: month, storeName: storeName, managerName: "system_store_placeholder" },
+            { 
+                $set: { 
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
+                    targetWeeklySales: weeklyData,
+                    updatedAt: new Date()
+                } 
+            },
+            { upsert: true }
+        );
+
+        res.json({ success: true });
 
     } catch (error) {
-        console.error("매장 목표 조회 오류:", error);
+        console.error("매장 목표 저장 오류:", error);
         res.status(500).json({ success: false });
     }
 });
-
-
 
 // ==========================================
 // [추가] 매장명 일괄 수정 및 삭제 API
