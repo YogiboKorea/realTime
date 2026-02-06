@@ -1119,6 +1119,77 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
 
 
 
+
+// ==========================================
+// [추가] 매장별 매출 목표 일괄 설정 API
+// ==========================================
+app.post('/api/jwasu/admin/store-target', async (req, res) => {
+    try {
+        const { month, storeName, targetMonthlySales, targetWeeklySales } = req.body;
+
+        if (!month || !storeName) return res.status(400).json({ success: false, message: '정보가 부족합니다.' });
+
+        // 1. 해당 월, 해당 매장의 '모든' 매니저 목표 데이터에서 매출 부분만 업데이트
+        // (upsert: true를 쓰면 매니저가 없어도 데이터가 생길 수 있으므로, updateMany로 기존 데이터 수정)
+        
+        // 주간 데이터 포맷팅
+        let weeklyData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+        if (targetWeeklySales) weeklyData = targetWeeklySales;
+
+        // A. monthlyTargetCollection (목표 컬렉션) 업데이트
+        await db.collection(monthlyTargetCollection).updateMany(
+            { month: month, storeName: storeName },
+            { 
+                $set: { 
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
+                    targetWeeklySales: weeklyData,
+                    updatedAt: new Date()
+                } 
+            },
+            { upsert: false } // 기존에 목표가 설정된 사람들의 매출만 업데이트
+        );
+
+        // B. (중요) 만약 매니저가 한 명도 없거나 목표가 설정된 적이 없는 경우를 대비해
+        // '시스템 플레이스홀더(투명인간)'에게 매출 목표를 심어둠 (대시보드 표출용)
+        await db.collection(monthlyTargetCollection).updateOne(
+            { month: month, storeName: storeName, managerName: "system_store_placeholder" },
+            { 
+                $set: { 
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
+                    targetWeeklySales: weeklyData,
+                    updatedAt: new Date()
+                } 
+            },
+            { upsert: true }
+        );
+
+        // C. 매니저 정보(jwasu_managers)의 기본 목표값도 업데이트 (선택 사항이지만 일관성을 위해)
+        await db.collection(staffCollectionName).updateMany(
+            { storeName: storeName },
+            { 
+                $set: { 
+                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
+                    targetWeeklySales: weeklyData
+                } 
+            }
+        );
+
+        res.json({ success: true, message: '매장 매출 목표가 설정되었습니다.' });
+
+    } catch (error) {
+        console.error("매장 매출 목표 저장 오류:", error);
+        res.status(500).json({ success: false, message: '서버 오류' });
+    }
+});
+
+
+
+
+
+
+
+
+
 // ==========================================
 // [추가] 매장명 일괄 수정 및 삭제 API
 // ==========================================
