@@ -1116,17 +1116,59 @@ app.post('/api/manager-sales/upload-excel', async (req, res) => {
         res.status(500).json({ success: false, message: '매출 업로드 중 오류 발생' });
     }
 });
-// ==========================================
-// [필수 추가] 매장 매출 목표 저장하기 (이게 있어야 저장이 됩니다!)
-// ==========================================
+
+
+// 1. 조회 (GET): 기존 데이터가 있으면 가져오고, 없으면 빈 값 반환
+app.get('/api/jwasu/admin/store-target', async (req, res) => {
+    try {
+        const { month, storeName } = req.query;
+        if (!month || !storeName) return res.status(400).json({ success: false });
+
+        // [1순위] '매장 공통 설정값(system_store_placeholder)'이 있는지 확인 (가장 정확함)
+        let target = await db.collection(monthlyTargetCollection).findOne({
+            month: month, 
+            storeName: storeName, 
+            managerName: "system_store_placeholder"
+        });
+
+        // [2순위 - 백업] 공통 설정값이 없다면? -> 옛날에 직원 이름으로 저장된 데이터 중 아무거나 하나 가져옴
+        // 조건: 해당 월, 해당 매장의 데이터이면서, '시스템 플레이스홀더'가 아닌 것 중 가장 최근에 수정된 것
+        if (!target) {
+            const backupTargets = await db.collection(monthlyTargetCollection)
+                .find({
+                    month: month, 
+                    storeName: storeName,
+                    managerName: { $ne: "system_store_placeholder" } // 시스템 데이터 제외
+                })
+                .sort({ updatedAt: -1, _id: -1 }) // 가장 최근에 수정한거 우선
+                .limit(1)
+                .toArray();
+            
+            if (backupTargets.length > 0) {
+                target = backupTargets[0];
+            }
+        }
+
+        // 데이터가 없으면 빈 객체 반환, 있으면 데이터 반환
+        res.json({ success: true, data: target || {} });
+
+    } catch (error) {
+        console.error("매장 목표 조회 오류:", error);
+        res.status(500).json({ success: false });
+    }
+});
+
+// 2. 저장 (POST): 이게 있어야 새로고침해도 데이터가 유지됩니다!
 app.post('/api/jwasu/admin/store-target', async (req, res) => {
     try {
         const { month, storeName, targetMonthlySales, targetWeeklySales } = req.body;
 
-        if (!month || !storeName) return res.status(400).json({ success: false, message: '정보 부족' });
+        if (!month || !storeName) return res.status(400).json({ success: false, message: '정보가 부족합니다.' });
 
-        // 주간 데이터 숫자 변환 (안전장치)
+        // 숫자 변환 (문자열로 들어올 경우 방지)
+        const monthlySales = parseInt(targetMonthlySales) || 0;
         let weeklyData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+        
         if (targetWeeklySales) {
             weeklyData.w1 = parseInt(targetWeeklySales.w1) || 0;
             weeklyData.w2 = parseInt(targetWeeklySales.w2) || 0;
@@ -1135,24 +1177,12 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
             weeklyData.w5 = parseInt(targetWeeklySales.w5) || 0;
         }
 
-        // 1. 기존 매니저들의 목표 데이터 업데이트
-        await db.collection(monthlyTargetCollection).updateMany(
-            { month: month, storeName: storeName },
-            { 
-                $set: { 
-                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
-                    targetWeeklySales: weeklyData,
-                    updatedAt: new Date()
-                } 
-            }
-        );
-
-        // 2. 매장 공통 데이터(PlaceHolder) 생성 또는 업데이트
+        // [A] 매장 공통 데이터(system_store_placeholder) 생성/업데이트 (화면 표시용)
         await db.collection(monthlyTargetCollection).updateOne(
             { month: month, storeName: storeName, managerName: "system_store_placeholder" },
             { 
                 $set: { 
-                    targetMonthlySales: parseInt(targetMonthlySales) || 0,
+                    targetMonthlySales: monthlySales,
                     targetWeeklySales: weeklyData,
                     updatedAt: new Date()
                 } 
@@ -1160,13 +1190,38 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
             { upsert: true }
         );
 
-        res.json({ success: true });
+        // [B] 해당 매장의 모든 직원들 데이터도 일괄 업데이트 (매출 목표 동기화)
+        // 기존 직원이 목표가 아예 없었다면 생기진 않게 updateMany 사용
+        await db.collection(monthlyTargetCollection).updateMany(
+            { month: month, storeName: storeName, managerName: { $ne: "system_store_placeholder" } },
+            { 
+                $set: { 
+                    targetMonthlySales: monthlySales,
+                    targetWeeklySales: weeklyData,
+                    updatedAt: new Date()
+                } 
+            }
+        );
+
+        // [C] 매니저 기본 정보(staffCollection)에도 업데이트 (선택사항, 데이터 일관성용)
+        await db.collection(staffCollectionName).updateMany(
+            { storeName: storeName },
+            { 
+                $set: { 
+                    targetMonthlySales: monthlySales,
+                    targetWeeklySales: weeklyData
+                } 
+            }
+        );
+
+        res.json({ success: true, message: '저장되었습니다.' });
 
     } catch (error) {
         console.error("매장 목표 저장 오류:", error);
-        res.status(500).json({ success: false });
+        res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
+
 
 // ==========================================
 // [추가] 매장명 일괄 수정 및 삭제 API
