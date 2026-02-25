@@ -972,7 +972,7 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [섹션 F] 기존 좌수 엑셀 업로드
+// [섹션 F] 기존 좌수 엑셀 업로드 ★ 수정: 해당 월 데이터 삭제 후 재등록
 app.post('/api/jwasu/upload-excel', async (req, res) => {
     try {
         const { data } = req.body; 
@@ -984,6 +984,31 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
         const staffMap = {};
         allStaffs.forEach(s => { if (s.managerName) { const cleanName = String(s.managerName).replace(/\s+/g, '').trim(); staffMap[cleanName] = s; } });
 
+        // ★★★ [NEW] 업로드 데이터에서 포함된 월(YYYY-MM) 목록 추출 ★★★
+        const monthSet = new Set();
+        data.forEach(item => {
+            if (item.date) {
+                const ym = String(item.date).substring(0, 7); // "2025-01" 형태
+                if (ym.match(/^\d{4}-\d{2}$/)) {
+                    monthSet.add(ym);
+                }
+            }
+        });
+
+        // ★★★ [NEW] 해당 월의 기존 데이터 삭제 ★★★
+        if (monthSet.size > 0) {
+            const deleteConditions = [];
+            monthSet.forEach(ym => {
+                const startDate = ym + '-01';
+                const endDate = ym + '-31'; // 31일까지 커버 (존재하지 않는 날짜도 괜찮음)
+                deleteConditions.push({ date: { $gte: startDate, $lte: endDate } });
+            });
+
+            const deleteResult = await jwasuCollection.deleteMany({ $or: deleteConditions });
+            console.log(`[엑셀 업로드] 기존 데이터 삭제: ${deleteResult.deletedCount}건 (대상 월: ${[...monthSet].join(', ')})`);
+        }
+
+        // 이후 기존 로직과 동일: bulkWrite로 새 데이터 삽입
         const dailyOperations = [];
         const managerUpdates = new Map();
 
@@ -992,7 +1017,7 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
             let excelName = String(item.managerName || '미지정').trim();
             const dateStr = item.date;
             const count = parseInt(item.count) || 0;
-            const target = parseInt(item.target) || 0; 
+            const target = parseInt(item.target) || 0;
 
             const cleanExcelName = excelName.replace(/\s+/g, '');
             const staffInfo = staffMap[cleanExcelName];
@@ -1041,8 +1066,12 @@ app.post('/api/jwasu/upload-excel', async (req, res) => {
             await staffCollection.bulkWrite(mgrOps);
         }
 
-        res.json({ success: true, message: `총 ${dailyOperations.length}건 처리 완료` });
-    } catch (error) { res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' }); }
+        const monthInfo = [...monthSet].join(', ');
+        res.json({ success: true, message: `[${monthInfo}] 기존 데이터 교체 완료. 총 ${dailyOperations.length}건 등록` });
+    } catch (error) { 
+        console.error('엑셀 업로드 오류:', error);
+        res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' }); 
+    }
 });
 
 
