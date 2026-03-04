@@ -750,17 +750,17 @@ app.get('/api/jwasu/admin/monthly-target', async (req, res) => {
         res.json({ success: true, data: target || {} });
     } catch (error) { res.status(500).json({ success: false }); }
 });
-
 app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
     try {
         const { 
             month, storeName, managerName, 
             targetCount, targetMonthlySales, targetWeeklySales, 
-            w1, w2, w3, w4, w5, 
+            w1, w2, w3, w4, w5, w6, // ★ w6 추가
             joinDate 
         } = req.body;
         
-        let weeklySalesData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+        // ★ w6: 0 초기값 추가
+        let weeklySalesData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0, w6: 0 };
 
         if (targetWeeklySales && typeof targetWeeklySales === 'object') {
             weeklySalesData.w1 = parseInt(targetWeeklySales.w1) || 0;
@@ -768,12 +768,14 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
             weeklySalesData.w3 = parseInt(targetWeeklySales.w3) || 0;
             weeklySalesData.w4 = parseInt(targetWeeklySales.w4) || 0;
             weeklySalesData.w5 = parseInt(targetWeeklySales.w5) || 0;
+            weeklySalesData.w6 = parseInt(targetWeeklySales.w6) || 0; // ★ 추가
         } else {
             weeklySalesData.w1 = parseInt(w1) || 0;
             weeklySalesData.w2 = parseInt(w2) || 0;
             weeklySalesData.w3 = parseInt(w3) || 0;
             weeklySalesData.w4 = parseInt(w4) || 0;
             weeklySalesData.w5 = parseInt(w5) || 0;
+            weeklySalesData.w6 = parseInt(w6) || 0; // ★ 추가
         }
 
         await db.collection(monthlyTargetCollection).updateOne(
@@ -1194,9 +1196,9 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
 
         if (!month || !storeName) return res.status(400).json({ success: false, message: '정보가 부족합니다.' });
 
-        // 숫자 변환 (문자열로 들어올 경우 방지)
         const monthlySales = parseInt(targetMonthlySales) || 0;
-        let weeklyData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0 };
+        // ★ w6: 0 초기값 추가
+        let weeklyData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0, w6: 0 };
         
         if (targetWeeklySales) {
             weeklyData.w1 = parseInt(targetWeeklySales.w1) || 0;
@@ -1204,9 +1206,10 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
             weeklyData.w3 = parseInt(targetWeeklySales.w3) || 0;
             weeklyData.w4 = parseInt(targetWeeklySales.w4) || 0;
             weeklyData.w5 = parseInt(targetWeeklySales.w5) || 0;
+            weeklyData.w6 = parseInt(targetWeeklySales.w6) || 0; // ★ 추가
         }
 
-        // [A] 매장 공통 데이터(system_store_placeholder) 생성/업데이트 (화면 표시용)
+        // [A] 매장 공통 데이터
         await db.collection(monthlyTargetCollection).updateOne(
             { month: month, storeName: storeName, managerName: "system_store_placeholder" },
             { 
@@ -1219,8 +1222,7 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
             { upsert: true }
         );
 
-        // [B] 해당 매장의 모든 직원들 데이터도 일괄 업데이트 (매출 목표 동기화)
-        // 기존 직원이 목표가 아예 없었다면 생기진 않게 updateMany 사용
+        // [B] 해당 매장의 모든 직원들 데이터도 일괄 업데이트
         await db.collection(monthlyTargetCollection).updateMany(
             { month: month, storeName: storeName, managerName: { $ne: "system_store_placeholder" } },
             { 
@@ -1232,7 +1234,7 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
             }
         );
 
-        // [C] 매니저 기본 정보(staffCollection)에도 업데이트 (선택사항, 데이터 일관성용)
+        // [C] 매니저 기본 정보
         await db.collection(staffCollectionName).updateMany(
             { storeName: storeName },
             { 
@@ -1250,7 +1252,6 @@ app.post('/api/jwasu/admin/store-target', async (req, res) => {
         res.status(500).json({ success: false, message: '서버 오류' });
     }
 });
-
 
 // ==========================================
 // [추가] 매장명 일괄 수정 및 삭제 API
