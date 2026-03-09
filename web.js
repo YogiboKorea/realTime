@@ -974,108 +974,102 @@ app.get('/api/jwasu/monthly-history', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false }); }
 });
 
-// [섹션 F] 기존 좌수 엑셀 업로드 ★ 수정: 해당 월 데이터 삭제 후 재등록
+// [섹션 F] 기존 좌수 엑셀 업로드 ★ 수정: 해당 날짜 데이터만 삭제 후 재등록
 app.post('/api/jwasu/upload-excel', async (req, res) => {
-    try {
-        const { data } = req.body; 
-        if (!Array.isArray(data) || data.length === 0) return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
+         try {
+          const { data } = req.body; 
+          if (!Array.isArray(data) || data.length === 0) return res.status(400).json({ success: false, message: '데이터가 없습니다.' });
+         
+          const jwasuCollection = db.collection(jwasuCollectionName);
+          const staffCollection = db.collection(staffCollectionName);
+          const allStaffs = await staffCollection.find().toArray();
+          const staffMap = {};
+          allStaffs.forEach(s => { if (s.managerName) { const cleanName = String(s.managerName).replace(/\s+/g, '').trim(); staffMap[cleanName] = s; } });
         
-        const jwasuCollection = db.collection(jwasuCollectionName);
-        const staffCollection = db.collection(staffCollectionName);
-        const allStaffs = await staffCollection.find().toArray();
-        const staffMap = {};
-        allStaffs.forEach(s => { if (s.managerName) { const cleanName = String(s.managerName).replace(/\s+/g, '').trim(); staffMap[cleanName] = s; } });
+         // ★★★ [수정] 업로드 데이터에서 '정확한 날짜(YYYY-MM-DD)'만 쏙쏙 뽑아내기 ★★★
+         const dateSet = new Set();
+         data.forEach(item => {
+          if (item.date) {
+            dateSet.add(item.date); // 예: "2025-01-05" 통째로 저장
+          }
+         });
 
-        // ★★★ [NEW] 업로드 데이터에서 포함된 월(YYYY-MM) 목록 추출 ★★★
-        const monthSet = new Set();
-        data.forEach(item => {
-            if (item.date) {
-                const ym = String(item.date).substring(0, 7); // "2025-01" 형태
-                if (ym.match(/^\d{4}-\d{2}$/)) {
-                    monthSet.add(ym);
-                }
-            }
-        });
+         // ★★★ [수정] 월 전체가 아닌, 엑셀에 있는 '해당 날짜'의 기존 데이터만 삭제 ★★★
+         const uniqueDates = [...dateSet];
+         if (uniqueDates.length > 0) {
+         const deleteResult = await jwasuCollection.deleteMany({ date: { $in: uniqueDates } });
+         console.log(`[엑셀 업로드] 기존 데이터 삭제: ${deleteResult.deletedCount}건 (대상 날짜: ${uniqueDates.join(', ')})`);
+          }
 
-        // ★★★ [NEW] 해당 월의 기존 데이터 삭제 ★★★
-        if (monthSet.size > 0) {
-            const deleteConditions = [];
-            monthSet.forEach(ym => {
-                const startDate = ym + '-01';
-                const endDate = ym + '-31'; // 31일까지 커버 (존재하지 않는 날짜도 괜찮음)
-                deleteConditions.push({ date: { $gte: startDate, $lte: endDate } });
-            });
+          // 이후 bulkWrite로 새 데이터 삽입
+          const dailyOperations = [];
+          const managerUpdates = new Map();
 
-            const deleteResult = await jwasuCollection.deleteMany({ $or: deleteConditions });
-            console.log(`[엑셀 업로드] 기존 데이터 삭제: ${deleteResult.deletedCount}건 (대상 월: ${[...monthSet].join(', ')})`);
-        }
+         data.forEach(item => {
+             let excelStore = String(item.storeName || '').trim();
+             let excelName = String(item.managerName || '미지정').trim();
+             const dateStr = item.date;
+             const count = parseInt(item.count) || 0;
+             const target = parseInt(item.target) || 0;
+    
+             const cleanExcelName = excelName.replace(/\s+/g, '');
+             const staffInfo = staffMap[cleanExcelName];
+    
+             const finalStoreName = staffInfo ? staffInfo.storeName : excelStore;
+             const finalManagerName = staffInfo ? staffInfo.managerName : excelName;
+            
+             dailyOperations.push({
+              updateOne: {
+               filter: { date: dateStr, storeName: finalStoreName, managerName: finalManagerName },
+               update: {
+               $set: {
+                 count: count,
+                 lastUpdated: new Date(),
+                 role: staffInfo ? staffInfo.role : '매니저',
+                 consignment: staffInfo ? staffInfo.consignment : 'N',
+                 targetCount: target > 0 ? target : (staffInfo ? staffInfo.targetCount : 0),
+                 targetMonthlySales: staffInfo ? (staffInfo.targetMonthlySales || 0) : 0,
+                 targetWeeklySales: staffInfo ? (staffInfo.targetWeeklySales || 0) : 0
+               },
+               $setOnInsert: { createdAt: new Date() }
+              },
+              upsert: true
+              }
+             });
 
-        // 이후 기존 로직과 동일: bulkWrite로 새 데이터 삽입
-        const dailyOperations = [];
-        const managerUpdates = new Map();
+           if (target > 0 && staffInfo) {
+           managerUpdates.set(staffInfo._id.toString(), target);
+           }
+          });
 
-        data.forEach(item => {
-            let excelStore = String(item.storeName || '').trim();
-            let excelName = String(item.managerName || '미지정').trim();
-            const dateStr = item.date;
-            const count = parseInt(item.count) || 0;
-            const target = parseInt(item.target) || 0;
-
-            const cleanExcelName = excelName.replace(/\s+/g, '');
-            const staffInfo = staffMap[cleanExcelName];
-
-            const finalStoreName = staffInfo ? staffInfo.storeName : excelStore;
-            const finalManagerName = staffInfo ? staffInfo.managerName : excelName;
-
-            dailyOperations.push({
+          if (dailyOperations.length > 0) {
+           await jwasuCollection.bulkWrite(dailyOperations);
+          }
+         
+          if (managerUpdates.size > 0) {
+              const mgrOps = [];
+              managerUpdates.forEach((newTarget, mgrId) => {
+               mgrOps.push({
                 updateOne: {
-                    filter: { date: dateStr, storeName: finalStoreName, managerName: finalManagerName },
-                    update: {
-                        $set: {
-                            count: count,
-                            lastUpdated: new Date(),
-                            role: staffInfo ? staffInfo.role : '매니저',
-                            consignment: staffInfo ? staffInfo.consignment : 'N',
-                            targetCount: target > 0 ? target : (staffInfo ? staffInfo.targetCount : 0),
-                            targetMonthlySales: staffInfo ? (staffInfo.targetMonthlySales || 0) : 0,
-                            targetWeeklySales: staffInfo ? (staffInfo.targetWeeklySales || 0) : 0
-                        },
-                        $setOnInsert: { createdAt: new Date() }
-                    },
-                    upsert: true
+                 filter: { _id: new ObjectId(mgrId) },
+                 update: { $set: { targetCount: newTarget } }
                 }
-            });
+               });
+              });
+              await staffCollection.bulkWrite(mgrOps);
+             }
 
-            if (target > 0 && staffInfo) {
-               managerUpdates.set(staffInfo._id.toString(), target);
-            }
-        });
+        // 완료 메시지도 날짜 기준으로 변경
+        const dateDisplay = uniqueDates.length > 3 
+                 ? `${uniqueDates.slice(0, 3).join(', ')} 외 ${uniqueDates.length - 3}일` 
+                 : uniqueDates.join(', ');
 
-        if (dailyOperations.length > 0) {
-            await jwasuCollection.bulkWrite(dailyOperations);
-        }
-        
-        if (managerUpdates.size > 0) {
-            const mgrOps = [];
-            managerUpdates.forEach((newTarget, mgrId) => {
-                mgrOps.push({
-                    updateOne: {
-                        filter: { _id: new ObjectId(mgrId) },
-                        update: { $set: { targetCount: newTarget } }
-                    }
-                });
-            });
-            await staffCollection.bulkWrite(mgrOps);
-        }
-
-        const monthInfo = [...monthSet].join(', ');
-        res.json({ success: true, message: `[${monthInfo}] 기존 데이터 교체 완료. 총 ${dailyOperations.length}건 등록` });
-    } catch (error) { 
-        console.error('엑셀 업로드 오류:', error);
-        res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' }); 
-    }
-});
-
+         res.json({ success: true, message: `[${dateDisplay}] 기존 실적 덮어쓰기 완료. 총 ${dailyOperations.length}건 등록` });
+         } catch (error) { 
+          console.error('엑셀 업로드 오류:', error);
+          res.status(500).json({ success: false, message: '업로드 중 서버 오류 발생' }); 
+         }
+    });
 
 // [섹션 H] 매니저 매출 관리
 app.get('/api/manager-sales', async (req, res) => {
