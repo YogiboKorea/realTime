@@ -2118,33 +2118,46 @@ app.post('/api/orders', async (req, res) => {
 });
 
 
-
-
 // ==========================================
 // [수정] 주문 데이터 + 성장률 통계 조회 API
 // ==========================================
 app.get('/api/orders', async (req, res) => {
     try {
         const dbOff = mongoClient.db('off'); 
-        const { month, store } = req.query; // store 파라미터도 받음
+        // 프론트엔드에서 보내는 파라미터 모두 추출
+        const { searchType, startDate, endDate, month, store } = req.query; 
         
-        // 1. 기준 월 설정 (없으면 현재 월)
-        const currentMonth = month || moment().tz('Asia/Seoul').format('YYYY-MM');
-        
+        let listQuery = {};
+        let currentMonth = '';
+
+        // 1. 조회 조건(listQuery) 분기 처리
+        if (searchType === 'range' && startDate && endDate) {
+            // [기간 설정] 일 경우: startDate ~ endDate 사이 데이터
+            listQuery.date = { $gte: startDate, $lte: endDate };
+            // 통계 계산을 위해 임의로 startDate 기준의 월을 할당
+            currentMonth = startDate.substring(0, 7); 
+        } else {
+            // [월별 조회] 일 경우 (기본값)
+            currentMonth = month || moment().tz('Asia/Seoul').format('YYYY-MM');
+            listQuery.date = { $regex: `^${currentMonth}` };
+        }
+
+        // 매장 필터 추가
+        if (store && store !== 'all') {
+            listQuery.store = store;
+        }
+
         // 2. 비교 월 계산 (Moment.js 활용)
         const currMoment = moment(currentMonth + '-01');
         const prevMonth = currMoment.clone().subtract(1, 'months').format('YYYY-MM');
         const prevYear = currMoment.clone().subtract(1, 'years').format('YYYY-MM');
 
-        // 3. 통계용 집계 함수 (빠름)
+        // 3. 통계용 집계 함수
         const getMonthlySum = async (targetMonth) => {
             const query = { date: { $regex: `^${targetMonth}` } };
-            
-            // 매장 필터가 있다면 적용 ('all'이 아닐 때)
             if (store && store !== 'all') {
                 query.store = store;
             }
-
             const result = await dbOff.collection('orders').aggregate([
                 { $match: query },
                 { $group: { _id: null, total: { $sum: "$amount" } } }
@@ -2153,17 +2166,23 @@ app.get('/api/orders', async (req, res) => {
             return result.length > 0 ? result[0].total : 0;
         };
 
+        // 기간 검색일 때도 통계(현재값)가 정확하게 나오도록 수정
+        const getCurrentSum = async () => {
+            const result = await dbOff.collection('orders').aggregate([
+                { $match: listQuery }, // 위에서 만든 분기 조건 재활용
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]).toArray();
+            return result.length > 0 ? result[0].total : 0;
+        };
+
         // 4. 병렬로 3가지 합계 계산 (현재, 전월, 전년)
         const [currSum, prevSum, yearSum] = await Promise.all([
-            getMonthlySum(currentMonth),
+            getCurrentSum(), 
             getMonthlySum(prevMonth),
             getMonthlySum(prevYear)
         ]);
 
-        // 5. 상세 목록 조회 (현재 월 데이터만)
-        let listQuery = { date: { $regex: `^${currentMonth}` } };
-        if (store && store !== 'all') listQuery.store = store;
-
+        // 5. 상세 목록 조회 (현재 월 또는 지정된 기간 데이터만)
         const projection = {
             orderNo: 1, date: 1, month: 1, week: 1, 
             store: 1, manager: 1, category: 1, beadType: 1,
@@ -2192,7 +2211,6 @@ app.get('/api/orders', async (req, res) => {
         res.status(500).json({ success: false, error: err.message }); 
     }
 });
-
 
 // ==========================================
 // ★ [NEW] 재고 조회 API (yogibo_stock DB 연동)
