@@ -755,11 +755,10 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
         const { 
             month, storeName, managerName, 
             targetCount, targetMonthlySales, targetWeeklySales, 
-            w1, w2, w3, w4, w5, w6, // ★ w6 추가
+            w1, w2, w3, w4, w5, w6, 
             joinDate 
         } = req.body;
         
-        // ★ w6: 0 초기값 추가
         let weeklySalesData = { w1: 0, w2: 0, w3: 0, w4: 0, w5: 0, w6: 0 };
 
         if (targetWeeklySales && typeof targetWeeklySales === 'object') {
@@ -768,16 +767,17 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
             weeklySalesData.w3 = parseInt(targetWeeklySales.w3) || 0;
             weeklySalesData.w4 = parseInt(targetWeeklySales.w4) || 0;
             weeklySalesData.w5 = parseInt(targetWeeklySales.w5) || 0;
-            weeklySalesData.w6 = parseInt(targetWeeklySales.w6) || 0; // ★ 추가
+            weeklySalesData.w6 = parseInt(targetWeeklySales.w6) || 0;
         } else {
             weeklySalesData.w1 = parseInt(w1) || 0;
             weeklySalesData.w2 = parseInt(w2) || 0;
             weeklySalesData.w3 = parseInt(w3) || 0;
             weeklySalesData.w4 = parseInt(w4) || 0;
             weeklySalesData.w5 = parseInt(w5) || 0;
-            weeklySalesData.w6 = parseInt(w6) || 0; // ★ 추가
+            weeklySalesData.w6 = parseInt(w6) || 0;
         }
 
+        // 1. 월별 목표 컬렉션에 저장 (기존 로직 유지)
         await db.collection(monthlyTargetCollection).updateOne(
             { month, storeName, managerName },
             { 
@@ -791,6 +791,15 @@ app.post('/api/jwasu/admin/monthly-target', async (req, res) => {
             },
             { upsert: true }
         );
+
+        // ★ 2. [추가] 매니저 마스터 컬렉션에도 입사일 동기화 (영구 보존)
+        if (joinDate) {
+            await db.collection(staffCollectionName).updateOne(
+                { storeName, managerName },
+                { $set: { joinDate: joinDate, updatedAt: new Date() } }
+            );
+        }
+
         res.json({ success: true });
     } catch (error) { 
         console.error("목표 저장 오류:", error);
@@ -873,21 +882,27 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
         const { 
             storeName, managerName, role, consignment, 
             targetCount, targetMonthlySales, targetWeeklySales, 
-            memo 
+            memo, joinDate // ★ joinDate 추가
         } = req.body;
+
+        // 동적으로 업데이트할 필드 구성
+        let updateFields = { 
+            storeName, managerName, role, consignment, 
+            targetCount: parseInt(targetCount) || 0, 
+            targetMonthlySales: parseInt(targetMonthlySales) || 0, 
+            targetWeeklySales: parseInt(targetWeeklySales) || 0,
+            memo: memo, 
+            updatedAt: new Date() 
+        };
+
+        // joinDate가 넘어왔을 때만 업데이트 필드에 포함
+        if (joinDate !== undefined) {
+            updateFields.joinDate = joinDate;
+        }
 
         await db.collection(staffCollectionName).updateOne(
             { _id: new ObjectId(id) },
-            { 
-                $set: { 
-                    storeName, managerName, role, consignment, 
-                    targetCount: parseInt(targetCount) || 0, 
-                    targetMonthlySales: parseInt(targetMonthlySales) || 0, 
-                    targetWeeklySales: parseInt(targetWeeklySales) || 0,
-                    memo: memo, 
-                    updatedAt: new Date() 
-                } 
-            }
+            { $set: updateFields }
         );
         res.json({ success: true });
     } catch (error) { 
@@ -895,7 +910,6 @@ app.put('/api/jwasu/admin/manager/:id', async (req, res) => {
         res.status(500).json({ success: false }); 
     }
 });
-
 app.put('/api/jwasu/admin/manager/:id/status', async (req, res) => {
     try {
         const { id } = req.params;
