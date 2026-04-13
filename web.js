@@ -2315,6 +2315,79 @@ app.get('/api/download/stock', async (req, res) => {
         res.status(500).send("엑셀 다운로드 중 오류가 발생했습니다.");
     }
 });
+
+
+// ==========================================
+// ★ [DB 마이그레이션] 이름/직급 통합 유틸리티 API
+// ==========================================
+app.post('/api/admin/migrate-names', async (req, res) => {
+    try {
+        // 클라이언트에서 바꿀 대상의 '현재 이름'과 '과거 이름 배열'을 받습니다.
+        const { targetName, oldNames } = req.body;
+        
+        if (!targetName || !Array.isArray(oldNames) || oldNames.length === 0) {
+            return res.status(400).json({ success: false, message: '파라미터가 잘못되었습니다. (targetName, oldNames 배열 필수)' });
+        }
+
+        console.log(`[DB 마이그레이션 시작] ${oldNames.join(', ')} -> ${targetName} (으)로 통합 중...`);
+
+        // 1. 기본 DB (yogibo) 컬렉션들
+        const jwasuColl = db.collection(jwasuCollectionName); // 좌수 기록
+        const staffColl = db.collection(staffCollectionName); // 매니저 정보
+        const targetColl = db.collection(monthlyTargetCollection); // 월별 목표
+        const salesColl = db.collection(managerSalesCollection); // 매니저별 매출
+
+        // 2. OFForder DB 컬렉션
+        const dbOrder = mongoClient.db(OFF_ORDER_DB);
+        const orderColl = dbOrder.collection(OFF_ORDER_COLLECTION);
+
+        // 3. off DB 컬렉션
+        const dbOff = mongoClient.db('off');
+        const msgColl = dbOff.collection(messageCollectionName); // 게시판
+        const statsColl = dbOff.collection(statsCollectionName); // 근무시간
+        const monthlyTargetOffColl = dbOff.collection('orders'); // 통합조회 통계 데이터 등
+
+        // 비동기로 모든 관련 컬렉션의 과거 이름들을 새 이름으로 일괄 업데이트 (updateMany)
+        const updatePromises = [
+            jwasuColl.updateMany({ managerName: { $in: oldNames } }, { $set: { managerName: targetName } }),
+            staffColl.updateMany({ managerName: { $in: oldNames } }, { $set: { managerName: targetName } }),
+            targetColl.updateMany({ managerName: { $in: oldNames } }, { $set: { managerName: targetName } }),
+            salesColl.updateMany({ managerName: { $in: oldNames } }, { $set: { managerName: targetName } }),
+            
+            // 주문 DB는 필드명이 manager_name 임을 주의
+            orderColl.updateMany({ manager_name: { $in: oldNames } }, { $set: { manager_name: targetName } }),
+            
+            // off DB 게시판/통계 등
+            msgColl.updateMany({ manager: { $in: oldNames } }, { $set: { manager: targetName } }),
+            statsColl.updateMany({ name: { $in: oldNames } }, { $set: { name: targetName } }),
+            monthlyTargetOffColl.updateMany({ manager: { $in: oldNames } }, { $set: { manager: targetName } })
+        ];
+
+        // Promise.all로 병렬 처리해서 속도 최적화
+        const results = await Promise.all(updatePromises);
+
+        res.json({
+            success: true,
+            message: `데이터 통합 완료: [${targetName}]`,
+            updatedCounts: {
+                offline_jwasu: results[0].modifiedCount,
+                jwasu_managers: results[1].modifiedCount,
+                jwasu_monthly_targets: results[2].modifiedCount,
+                manager_salesNew: results[3].modifiedCount,
+                ordersOffData: results[4].modifiedCount,
+                messages: results[5].modifiedCount,
+                work_stats: results[6].modifiedCount,
+                orders: results[7].modifiedCount
+            }
+        });
+
+    } catch (error) {
+        console.error("❌ 마이그레이션 실패:", error);
+        res.status(500).json({ success: false, message: '마이그레이션 중 오류 발생', error: error.message });
+    }
+});
+
+
 // --- 8. 서버 시작 ---
 mongoClient.connect()
     .then(client => {
