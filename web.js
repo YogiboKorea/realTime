@@ -2193,9 +2193,19 @@ app.get('/api/orders', async (req, res) => {
             return result.length > 0 ? result[0].total : 0;
         };
 
+        // 🔥 [수정] 진행 중인 월이면 currSum도 MTD(이번 달 1일~오늘)로 잘라서 비교
+        //   - 작년/전월은 이미 dayLimit으로 MTD 자르고 있는데 currSum만 전체 월이었음
+        //   - 미래 일자 데이터가 있거나 월말로 가면 비교가 어긋남
         const getCurrentSum = async () => {
+            let query = { ...listQuery };
+            if (dayLimit && !startDate && !endDate) {
+                // 월별 진행중 조회 모드: 1일 ~ 오늘까지로 명시적 자름
+                const startDay = `${currentMonth}-01`;
+                const endDay   = `${currentMonth}-${String(dayLimit).padStart(2, '0')}`;
+                query.date = { $gte: startDay, $lte: endDay };
+            }
             const result = await dbOff.collection('orders').aggregate([
-                { $match: listQuery },
+                { $match: query },
                 { $group: { _id: null, total: { $sum: "$amount" } } }
             ]).toArray();
             return result.length > 0 ? result[0].total : 0;
