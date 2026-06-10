@@ -2412,16 +2412,16 @@ mongoClient.connect()
             // 랭킹 서버 초기화 로직 (Cafe24)
             //await getTokensFromDB(); // DB에서 토큰 로드
 
-            // 스케줄: 매 시간 정각에 토큰 갱신
-            schedule.scheduleJob('0 * * * *', async () => {
-                console.log('스케줄 작업 실행: 토큰 갱신 시작');
-                try {
-                    await refreshAccessToken();
-                    console.log('토큰 갱신 완료');
-                } catch (error) {
-                    console.error('스케줄된 토큰 갱신 중 오류 발생:', error.message);
-                }
-            });
+            // 스케줄: 매 시간 정각에 토큰 갱신 (Cafe24 토큰 미사용 - 비활성화)
+            // schedule.scheduleJob('0 * * * *', async () => {
+            //     console.log('스케줄 작업 실행: 토큰 갱신 시작');
+            //     try {
+            //         await refreshAccessToken();
+            //         console.log('토큰 갱신 완료');
+            //     } catch (error) {
+            //         console.error('스케줄된 토큰 갱신 중 오류 발생:', error.message);
+            //     }
+            // });
 
         });
     })
